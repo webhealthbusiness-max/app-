@@ -59,3 +59,19 @@ test('production startup requires a durable database path', () => {
   assert.notEqual(result.status, 0, 'server must not start without a configured persistent database path')
   assert.match(result.stderr, /DATABASE_PATH must point to a persistent production data volume/)
 })
+
+test('account deletion removes queued notification emails', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const source = await readFile(serverPath, 'utf8')
+  const deletionStart = source.indexOf("app.delete('/api/data/delete'")
+  assert.notEqual(deletionStart, -1, 'account deletion route must exist')
+  const deletionEnd = source.indexOf("\napp.", deletionStart + 1)
+  const deletionRoute = source.slice(deletionStart, deletionEnd === -1 ? source.length : deletionEnd)
+  assert.match(deletionRoute, /'notification_emails'/, 'account deletion must remove queued emails')
+})
+
+test('email worker does not send a queue item that was deleted before it was claimed', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const source = await readFile(serverPath, 'utf8')
+  assert.match(source, /const claim = db\.prepare\('UPDATE notification_emails SET status = \? WHERE id = \? AND status = \?'\)[\s\S]{0,120}if \(!claim\.changes\) continue/)
+})
