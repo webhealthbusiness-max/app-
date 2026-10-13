@@ -34,4 +34,4 @@ Do not deploy or enable live financial services until all blocking security and 
 
 ## Current status
 
-No hosting provider or public domain has been selected. Production deployment cannot be completed until the owner creates/configures those external resources. Do not represent this runbook as a successful deployment.
+Hosting choice: VPS. Domain: not yet registered/configured. The next action is to register a domain and provision a hardened VPS, then deploy to staging first using docs/VPS-DEPLOYMENT-CHECKLIST.md. No VPS, DNS, TLS certificate, persistent volume, or production service has been created by this preparation. Do not represent this runbook as a successful deployment.
