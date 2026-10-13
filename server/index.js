@@ -1632,6 +1632,7 @@ app.delete('/api/data/delete', withUser, async (req, res, next) => {
     'accounts',
     'bank_connections',
     'notification_emails',
+    'auth_tokens',
     'financial_profiles',
   ]
 
