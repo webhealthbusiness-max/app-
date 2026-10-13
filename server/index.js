@@ -1558,17 +1558,11 @@ app.delete('/api/data/delete', withUser, async (req, res, next) => {
     return res.status(503).json({ error: 'Bank connections could not be revoked, so the account was not deleted. Restore Plaid configuration or contact support.' })
   }
 
-  const deletionNotification = {
-    ...req.user,
-    email: req.user.email,
+  const deletionEmail = {
+    to: req.user.email,
+    subject: 'Grounded account deletion completed',
+    text: `Grounded permanently deleted your account and locally stored data at ${new Date().toUTCString()}. If you did not request this, contact support.`,
   }
-  notifyUser(
-    deletionNotification,
-    'account_deleted',
-    'Account deletion requested',
-    'Your Grounded account and stored data are being permanently deleted.',
-    `Grounded received a request to permanently delete your account at ${new Date().toUTCString()}. If you did not request this, contact support.`,
-  )
 
   const tables = [
     'tasks',
@@ -1589,6 +1583,16 @@ app.delete('/api/data/delete', withUser, async (req, res, next) => {
     }
     db.prepare('DELETE FROM users WHERE id = ?').run(req.user.id)
   })()
+
+  // Queue rows were removed with the account, so send the receipt directly only
+  // after deletion succeeds. Email failure must not reverse a completed deletion.
+  if (emailTransport) {
+    try {
+      await emailTransport.sendMail({ from: emailFrom, ...deletionEmail })
+    } catch (error) {
+      console.error('Account deletion receipt email failed:', error?.code || 'Unknown SMTP error')
+    }
+  }
   return res.json({ success: true })
 })
 
