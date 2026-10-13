@@ -1230,10 +1230,12 @@ function App() {
               </label>
             )}
 
-            <label className="field">
-              <span>Email</span>
-              <input autoComplete="email" maxLength={254} required type="email" value={authForm.email} onChange={(event) => setAuthForm((prev) => ({ ...prev, email: event.target.value }))} />
-            </label>
+            {authMode !== 'reset' && (
+              <label className="field">
+                <span>Email</span>
+                <input autoComplete="email" maxLength={254} required type="email" value={authForm.email} onChange={(event) => setAuthForm((prev) => ({ ...prev, email: event.target.value }))} />
+              </label>
+            )}
 
             {authMode !== 'forgot' && (
               <label className="field">
