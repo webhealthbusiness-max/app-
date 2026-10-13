@@ -8,7 +8,7 @@ import { OAuth2Client } from 'google-auth-library'
 import { Configuration, PlaidApi, PlaidEnvironments, Products } from 'plaid'
 import Database from 'better-sqlite3'
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -1874,6 +1874,27 @@ app.get('/api/health', (_req, res) => {
   const dbStatus = db.prepare('SELECT 1').get() ? 'healthy' : 'unhealthy'
   res.json({ ok: dbStatus === 'healthy', service: 'grounded-api', uptimeMs: Date.now() - appStartTime, db: dbStatus, timestamp: new Date().toISOString() })
 })
+
+const frontendDistPath = path.resolve(__dirname, '../dist')
+if (existsSync(path.join(frontendDistPath, 'index.html'))) {
+  app.use(express.static(frontendDistPath, {
+    index: false,
+    setHeaders(res, filePath) {
+      if (filePath.includes(path.sep + 'assets' + path.sep)) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+      } else {
+        res.setHeader('Cache-Control', 'no-cache')
+      }
+    },
+  }))
+  app.use((req, res, next) => {
+    if (req.method !== 'GET' || req.path.startsWith('/api/') || req.path === '/health') return next()
+    res.setHeader('Cache-Control', 'no-cache')
+    return res.sendFile(path.join(frontendDistPath, 'index.html'), (error) => {
+      if (error) next(error)
+    })
+  })
+}
 
 app.use((error, _req, res, _next) => {
   if (error?.message === 'Origin not allowed by CORS policy.') {
