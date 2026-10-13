@@ -192,3 +192,14 @@ PLAID_REDIRECT_URI=<optional registered HTTPS OAuth redirect>
 ```
 
 After setting production environment variables, restart/redeploy the API. Rebuild and redeploy the frontend whenever `VITE_GOOGLE_CLIENT_ID` changes.
+
+
+## Authentication recovery and encrypted backups
+
+- Production signup now requires email verification; the API creates a single-use token whose hash is stored in SQLite, and login is blocked until verification. Verification links expire after 24 hours.
+- Password reset requests use generic responses to avoid confirming whether an email is registered. Reset tokens are hashed, expire after one hour, are single-use, and reset the account password. Reset increments the session version so existing bearer sessions are rejected.
+- Email verification and password reset require working SMTP in production. Test these flows in staging using synthetic accounts and a dedicated test email provider before release.
+- Generate a separate `BACKUP_ENCRYPTION_KEY` using `openssl rand -hex 32`; keep it separate from `BANK_TOKEN_ENCRYPTION_KEY`. Do not put it in source control or a frontend variable.
+- `npm run backup` creates an AES-256-GCM encrypted SQLite backup. `npm run restore` restores an encrypted backup to a new, non-existing path and runs SQLite integrity_check before writing it. See [docs/BACKUP-RESTORE.md](docs/BACKUP-RESTORE.md).
+- These scripts and recovery flows must pass CI and a real staging restore/email drill before they can be considered production-ready. Off-host backup retention, scheduling, alerting, and a tested production restore procedure are still required.
+- See [docs/SECURITY-ACCESS-CONTROLS.md](docs/SECURITY-ACCESS-CONTROLS.md) for the route-by-route financial-data authorization checklist and [docs/DEPLOYMENT-RUNBOOK.md](docs/DEPLOYMENT-RUNBOOK.md) for deployment gates.
