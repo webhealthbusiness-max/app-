@@ -538,7 +538,7 @@ function App() {
   }
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search)
+    const params = new URLSearchParams(window.location.hash.replace(/^#/, ''))
     const verificationToken = params.get('verifyEmail')
     const resetToken = params.get('resetPassword')
     if (verificationToken) {
@@ -546,7 +546,7 @@ function App() {
       void fetchJson<{ message: string }>('/api/auth/verify-email', { method: 'POST', body: JSON.stringify({ token: verificationToken }) })
         .then((result: { message: string }) => { setAuthMessage(result.message); setAuthMode('login') })
         .catch((error) => setAuthError(error instanceof Error ? error.message : 'Could not verify email.'))
-        .finally(() => { setAuthBusy(false); window.history.replaceState({}, document.title, window.location.pathname) })
+        .finally(() => { setAuthBusy(false); window.history.replaceState({}, document.title, window.location.pathname + window.location.search) })
     } else if (resetToken) {
       setAuthTokenFromLink(resetToken)
       setAuthMode('reset')
