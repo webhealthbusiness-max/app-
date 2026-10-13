@@ -55,4 +55,4 @@ The restore script refuses to overwrite an existing destination, authenticates/d
 
 ## Important limitations
 
-These scripts have not yet been run against Grounded's database in this environment. They are an implementation starting point, not proof of a completed backup/restore test. A host-specific scheduled backup, off-host upload, alerting, retention enforcement, and restore drill still need to be configured and verified. Do not declare backups production-ready until the CI tests and a staging restore drill pass.
+CI now exercises an encrypted backup and restore round-trip using a temporary SQLite database containing synthetic test data. This does not validate recovery of a real Grounded database or prove a production restore drill. A host-specific scheduled backup, off-host upload, alerting, retention enforcement, and staging restore drill still need to be configured and verified. Do not declare backups production-ready until the current CI checks and a staging restore drill pass.
