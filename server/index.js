@@ -796,7 +796,7 @@ app.post('/api/auth/signup', (req, res) => {
   if (requireEmailVerification) {
     const token = createAuthToken(user.id, 'verify_email', '+24 hours')
     const url = new URL('/', appBaseUrl)
-    url.searchParams.set('verifyEmail', token)
+    url.hash = new URLSearchParams({ verifyEmail: token }).toString()
     queueAuthEmail(user.id, user.email, 'Verify your Grounded email', 'Hi ' + user.name + ',\n\nVerify your email address within 24 hours:\n' + url.toString() + '\n\nIf you did not create this account, ignore this email.')
     return res.status(201).json({ verificationRequired: true, message: 'Check your email for a verification link. The link expires in 24 hours.' })
   }
@@ -823,7 +823,7 @@ app.post('/api/auth/resend-verification', (req, res) => {
     if (user) {
       const token = createAuthToken(user.id, 'verify_email', '+24 hours')
       const url = new URL('/', appBaseUrl)
-      url.searchParams.set('verifyEmail', token)
+      url.hash = new URLSearchParams({ verifyEmail: token }).toString()
       queueAuthEmail(user.id, user.email, 'Verify your Grounded email', 'Hi ' + user.name + ',\n\nVerify your email within 24 hours:\n' + url.toString() + '\n\nIf you did not request this, ignore this message.')
     }
   }
@@ -838,7 +838,7 @@ app.post('/api/auth/password-reset/request', (req, res) => {
     if (user) {
       const token = createAuthToken(user.id, 'reset_password', '+1 hour')
       const url = new URL('/', appBaseUrl)
-      url.searchParams.set('resetPassword', token)
+      url.hash = new URLSearchParams({ resetPassword: token }).toString()
       queueAuthEmail(user.id, user.email, 'Reset your Grounded password', 'Hi ' + user.name + ',\n\nReset your password within one hour:\n' + url.toString() + '\n\nIf you did not request a reset, ignore this email. Your password will not change.')
     }
   }
