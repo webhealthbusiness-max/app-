@@ -589,6 +589,20 @@ function App() {
     }
   }
 
+  const handleResendVerification = async () => {
+    setAuthError('')
+    setAuthMessage('')
+    setAuthBusy(true)
+    try {
+      const result = await fetchJson<{ message: string }>('/api/auth/resend-verification', { method: 'POST', body: JSON.stringify({ email: authForm.email }) })
+      setAuthMessage(result.message)
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : 'Could not request another verification email.')
+    } finally {
+      setAuthBusy(false)
+    }
+  }
+
   const logout = () => {
     localStorage.removeItem('grounded-token')
     setIsAuthenticated(false)
@@ -1251,6 +1265,7 @@ function App() {
               {authBusy ? 'Please wait…' : authMode === 'signup' ? 'Create account' : authMode === 'login' ? 'Log in' : authMode === 'forgot' ? 'Send reset link' : 'Reset password'}
             </button>
             {authMode === 'login' && <button type="button" className="text-button" onClick={() => { setAuthMode('forgot'); setAuthError(''); setAuthMessage('') }}>Forgot password?</button>}
+            {authMode === 'login' && <button type="button" className="text-button" disabled={authBusy || !authForm.email} onClick={() => void handleResendVerification()}>Resend verification email</button>}
             {(authMode === 'forgot' || authMode === 'reset') && <button type="button" className="text-button" onClick={() => { setAuthMode('login'); setAuthError(''); setAuthMessage('') }}>Back to log in</button>}
             {authMode === 'signup' && <p className="auth-hint">In production, we'll email you a verification link before your account can be used.</p>}
             {googleClientId && authMode !== 'forgot' && authMode !== 'reset' && (
