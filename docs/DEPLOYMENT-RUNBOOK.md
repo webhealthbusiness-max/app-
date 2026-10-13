@@ -18,7 +18,7 @@ Grounded is not deployed yet. This document prepares the release process but doe
 - [ ] Configure `APP_BASE_URL` and `ALLOWED_ORIGINS` to exact HTTPS staging origins.
 - [ ] Set a random `JWT_SECRET` of at least 32 characters, persistent `DATABASE_PATH`, complete SMTP settings, Stripe test-mode values, and Plaid Sandbox values.
 - [ ] Run `npm ci`, `npm audit --audit-level=moderate`, `npm test`, and `npm run build` on the exact release commit.
-- [ ] Verify external `/health` and `/api/health`, authentication, recovery/verification email, ownership tests, checkout/webhook test mode, bank sandbox, export/deletion, and a restore drill.
+- [ ] Verify external `/health` and `/api/health`, authentication, recovery/verification email, one-time token expiry, session revocation after password reset, ownership tests, checkout/webhook test mode, bank sandbox, export/deletion, and a restore drill.
 - [ ] Test restart, deploy rollback, database persistence, backup alerting, and restoring a backup into a separate staging database.
 
 ## Production gate
