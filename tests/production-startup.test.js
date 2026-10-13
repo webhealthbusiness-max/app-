@@ -85,3 +85,16 @@ test('task completion update enforces ownership in the write query', async () =>
   const route = source.slice(routeStart, routeEnd === -1 ? source.length : routeEnd)
   assert.match(route, /UPDATE tasks SET completed = \? WHERE id = \? AND user_id = \?/, 'task update must be scoped to the authenticated owner')
 })
+
+
+test('Stripe subscription persistence rejects billing identifiers owned by another user', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const source = await readFile(serverPath, 'utf8')
+  const persistenceStart = source.indexOf('const persistStripeSubscription =')
+  assert.notEqual(persistenceStart, -1, 'Stripe persistence function must exist')
+  const persistenceEnd = source.indexOf('\nconst getBillingStatus', persistenceStart)
+  const persistence = source.slice(persistenceStart, persistenceEnd === -1 ? source.length : persistenceEnd)
+  assert.match(persistence, /WHERE \(stripe_customer_id = \? AND \? IS NOT NULL\)[\s\S]*OR \(stripe_subscription_id = \? AND \? IS NOT NULL\)/, 'existing Stripe identifiers must be checked')
+  assert.match(persistence, /conflictingBillingRecords\.some\(\(record\) => record\.user_id !== userId\)/, 'billing records must not be reassigned across users')
+  assert.ok(persistence.indexOf('conflictingBillingRecords.some') < persistence.indexOf('INSERT INTO billing_subscriptions'), 'ownership conflict must be checked before persistence')
+})
