@@ -7,7 +7,7 @@ import nodemailer from 'nodemailer'
 import { OAuth2Client } from 'google-auth-library'
 import { Configuration, PlaidApi, PlaidEnvironments, Products } from 'plaid'
 import Database from 'better-sqlite3'
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -17,6 +17,7 @@ const __dirname = path.dirname(__filename)
 const app = express()
 const port = Number(process.env.PORT || 4000)
 const isProduction = process.env.NODE_ENV === 'production'
+const requireEmailVerification = isProduction || process.env.AUTH_REQUIRE_EMAIL_VERIFICATION === 'true'
 if (isProduction && (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32)) {
   throw new Error('A JWT_SECRET of at least 32 characters is required in production.')
 }
@@ -597,6 +598,8 @@ db.exec(`
 `) 
 db.prepare("UPDATE notification_emails SET status = 'queued' WHERE status = 'sending'").run()
 const userColumns = new Set(db.pragma('table_info(users)').map((column) => column.name))
+if (!userColumns.has('email_verified')) db.exec('ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 1')
+db.exec(`CREATE TABLE IF NOT EXISTS auth_tokens (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, purpose TEXT NOT NULL CHECK (purpose IN ('verify_email', 'reset_password')), expires_at TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE); CREATE INDEX IF NOT EXISTS auth_tokens_user_purpose_idx ON auth_tokens(user_id, purpose);`)
 if (!userColumns.has('google_sub')) {
   db.exec('ALTER TABLE users ADD COLUMN google_sub TEXT')
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_google_sub_unique ON users(google_sub) WHERE google_sub IS NOT NULL')
@@ -760,46 +763,98 @@ const requirePlus = (req, res, next) => {
   return next()
 }
 
+const hashAuthToken = (token) => createHash('sha256').update(token).digest('hex')
+const createAuthToken = (userId, purpose, lifetime) => {
+  const token = randomBytes(32).toString('hex')
+  db.prepare('DELETE FROM auth_tokens WHERE user_id = ? AND purpose = ?').run(userId, purpose)
+  db.prepare("INSERT INTO auth_tokens (token_hash, user_id, purpose, expires_at) VALUES (?, ?, ?, datetime('now', ?))").run(hashAuthToken(token), userId, purpose, lifetime)
+  return token
+}
+const queueAuthEmail = (userId, recipient, subject, message) => {
+  if (!emailTransport) return false
+  db.prepare('INSERT INTO notification_emails (user_id, recipient, subject, message) VALUES (?, ?, ?, ?)').run(userId, recipient, subject, message)
+  void deliverQueuedEmails()
+  return true
+}
+
 app.post('/api/auth/signup', (req, res) => {
   const { name, email, password } = req.body || {}
-  if (!enforceRateLimit(req, 'signup', RATE_LIMITS.signup)) {
-    return res.status(429).json({ error: 'Too many sign-up attempts. Please wait a moment and try again.' })
-  }
-
+  if (!enforceRateLimit(req, 'signup', RATE_LIMITS.signup)) return res.status(429).json({ error: 'Too many sign-up attempts. Please wait a moment and try again.' })
   const safeName = sanitizeText(name)
   const safeEmail = sanitizeText(email).toLowerCase()
   const safePassword = String(password || '')
-
-  if (
-    !safeName
-    || safeName.length > 80
-    || !isValidEmail(safeEmail)
-    || safePassword.length < 12
-    || Buffer.byteLength(safePassword, 'utf8') > 72
-  ) {
-    return res.status(400).json({ error: 'Name (up to 80 characters), valid email, and a password of 12–72 bytes are required.' })
-  }
-
-  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(safeEmail)
-  if (existing) {
-    return res.status(409).json({ error: 'A user already exists with this email.' })
-  }
-
-  const passwordHash = bcrypt.hashSync(safePassword, 12)
+  if (!safeName || safeName.length > 80 || !isValidEmail(safeEmail) || safePassword.length < 12 || Buffer.byteLength(safePassword, 'utf8') > 72) return res.status(400).json({ error: 'Name (up to 80 characters), valid email, and a password of 12–72 bytes are required.' })
+  if (db.prepare('SELECT id FROM users WHERE email = ?').get(safeEmail)) return res.status(409).json({ error: 'A user already exists with this email.' })
   const user = db.transaction(() => {
-    const result = db.prepare('INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)')
-      .run(safeName, safeEmail, passwordHash)
+    const result = db.prepare('INSERT INTO users (name, email, password_hash, email_verified) VALUES (?, ?, ?, ?)').run(safeName, safeEmail, bcrypt.hashSync(safePassword, 12), requireEmailVerification ? 0 : 1)
     createUserSeedData(result.lastInsertRowid)
     return db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(result.lastInsertRowid)
   })()
-  notifyUser(
-    user,
-    'account_created',
-    'Welcome to Grounded',
-    'Your Grounded account was created. You can review account activity in Notifications.',
-    `Hi ${user.name},\n\nYour Grounded account was created successfully. You can review account activity in your in-app Notifications.\n\nIf you did not create this account, please contact support.`,
-  )
+  notifyUser(user, 'account_created', 'Welcome to Grounded', 'Your Grounded account was created. You can review account activity in Notifications.')
+  if (requireEmailVerification) {
+    const token = createAuthToken(user.id, 'verify_email', '+24 hours')
+    const url = new URL('/', appBaseUrl)
+    url.searchParams.set('verifyEmail', token)
+    queueAuthEmail(user.id, user.email, 'Verify your Grounded email', 'Hi ' + user.name + ',\n\nVerify your email address within 24 hours:\n' + url.toString() + '\n\nIf you did not create this account, ignore this email.')
+    return res.status(201).json({ verificationRequired: true, message: 'Check your email for a verification link. The link expires in 24 hours.' })
+  }
   return res.status(201).json({ token: createUserToken(user), user })
+})
+
+app.post('/api/auth/verify-email', (req, res) => {
+  const token = typeof req.body?.token === 'string' ? req.body.token : ''
+  if (!/^[a-f0-9]{64}$/.test(token) || !enforceRateLimit(req, 'verify-email', 10)) return res.status(400).json({ error: 'Verification link is invalid or expired. Request a new one.' })
+  const record = db.prepare("SELECT user_id FROM auth_tokens WHERE token_hash = ? AND purpose = 'verify_email' AND expires_at > CURRENT_TIMESTAMP").get(hashAuthToken(token))
+  if (!record) return res.status(400).json({ error: 'Verification link is invalid or expired. Request a new one.' })
+  db.transaction(() => {
+    db.prepare('UPDATE users SET email_verified = 1 WHERE id = ?').run(record.user_id)
+    db.prepare('DELETE FROM auth_tokens WHERE user_id = ? AND purpose = ?').run(record.user_id, 'verify_email')
+  })()
+  return res.json({ verified: true, message: 'Email verified. You can now log in.' })
+})
+
+app.post('/api/auth/resend-verification', (req, res) => {
+  if (!enforceRateLimit(req, 'resend-verification', 5)) return res.status(429).json({ error: 'Too many requests. Please wait before trying again.' })
+  const email = sanitizeText(req.body?.email).toLowerCase()
+  if (isValidEmail(email) && emailTransport) {
+    const user = db.prepare('SELECT id, name, email FROM users WHERE email = ? AND email_verified = 0').get(email)
+    if (user) {
+      const token = createAuthToken(user.id, 'verify_email', '+24 hours')
+      const url = new URL('/', appBaseUrl)
+      url.searchParams.set('verifyEmail', token)
+      queueAuthEmail(user.id, user.email, 'Verify your Grounded email', 'Hi ' + user.name + ',\n\nVerify your email within 24 hours:\n' + url.toString() + '\n\nIf you did not request this, ignore this message.')
+    }
+  }
+  return res.json({ message: 'If the address belongs to an unverified account, a new verification link will be sent.' })
+})
+
+app.post('/api/auth/password-reset/request', (req, res) => {
+  if (!enforceRateLimit(req, 'password-reset-request', 5)) return res.status(429).json({ error: 'Too many requests. Please wait before trying again.' })
+  const email = sanitizeText(req.body?.email).toLowerCase()
+  if (isValidEmail(email) && emailTransport) {
+    const user = db.prepare('SELECT id, name, email FROM users WHERE email = ?').get(email)
+    if (user) {
+      const token = createAuthToken(user.id, 'reset_password', '+1 hour')
+      const url = new URL('/', appBaseUrl)
+      url.searchParams.set('resetPassword', token)
+      queueAuthEmail(user.id, user.email, 'Reset your Grounded password', 'Hi ' + user.name + ',\n\nReset your password within one hour:\n' + url.toString() + '\n\nIf you did not request a reset, ignore this email. Your password will not change.')
+    }
+  }
+  return res.json({ message: 'If an account exists for that address, password reset instructions will be sent.' })
+})
+
+app.post('/api/auth/password-reset/complete', (req, res) => {
+  const token = typeof req.body?.token === 'string' ? req.body.token : ''
+  const password = typeof req.body?.password === 'string' ? req.body.password : ''
+  if (!/^[a-f0-9]{64}$/.test(token) || password.length < 12 || Buffer.byteLength(password, 'utf8') > 72) return res.status(400).json({ error: 'A valid reset link and a password of 12–72 bytes are required.' })
+  if (!enforceRateLimit(req, 'password-reset-complete', 10)) return res.status(429).json({ error: 'Too many attempts. Please wait before trying again.' })
+  const record = db.prepare("SELECT user_id FROM auth_tokens WHERE token_hash = ? AND purpose = 'reset_password' AND expires_at > CURRENT_TIMESTAMP").get(hashAuthToken(token))
+  if (!record) return res.status(400).json({ error: 'Reset link is invalid or expired. Request another one.' })
+  db.transaction(() => {
+    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(password, 12), record.user_id)
+    db.prepare('DELETE FROM auth_tokens WHERE user_id = ?').run(record.user_id)
+  })()
+  return res.json({ message: 'Password reset successfully. Please log in with your new password.' })
 })
 
 app.post('/api/auth/login', (req, res) => {
@@ -825,6 +880,7 @@ app.post('/api/auth/login', (req, res) => {
     return res.status(401).json({ error: 'Invalid email or password.' })
   }
 
+  if (requireEmailVerification && !user.email_verified) return res.status(403).json({ error: 'Please verify your email before logging in.', code: 'EMAIL_NOT_VERIFIED' })
   const safeUser = { id: user.id, name: user.name, email: user.email }
   notifyUser(
     safeUser,
