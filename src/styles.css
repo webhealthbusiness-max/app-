@@ -1838,3 +1838,10 @@ select {
 .toggle.active span {
   transform: translateX(20px);
 }
+
+
+/* Authentication recovery and verification feedback */
+.auth-success { color: #246b45; background: #eaf7ef; border: 1px solid #b8e2c7; border-radius: 12px; padding: 12px 14px; font-size: 0.9rem; line-height: 1.45; }
+.auth-hint { color: var(--muted, #667085); font-size: 0.85rem; line-height: 1.45; margin: 0; }
+.text-button { border: 0; background: transparent; color: var(--accent, #347a55); padding: 10px; cursor: pointer; font: inherit; }
+.text-button:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
