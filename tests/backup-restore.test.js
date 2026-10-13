@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import Database from 'better-sqlite3'
-import { mkdtemp, readdir, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -45,4 +45,26 @@ test('encrypted SQLite backup restores an integrity-checked copy without overwri
     env: { ...process.env, BACKUP_FILE: backupPath, RESTORE_DATABASE_PATH: restoredPath, BACKUP_ENCRYPTION_KEY: key, RESTORE_CONFIRM: 'YES' },
   })
   assert.notEqual(overwrite.status, 0, 'restore must not overwrite an existing destination')
+
+  const wrongKeyPath = path.join(directory, 'wrong-key.sqlite')
+  const wrongKeyRestore = spawnSync(process.execPath, ['scripts/restore-db.js'], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    env: { ...process.env, BACKUP_FILE: backupPath, RESTORE_DATABASE_PATH: wrongKeyPath, BACKUP_ENCRYPTION_KEY: 'b'.repeat(64), RESTORE_CONFIRM: 'YES' },
+  })
+  assert.notEqual(wrongKeyRestore.status, 0, 'restore must reject an incorrect encryption key')
+  assert.ok(!(await readdir(directory)).includes('wrong-key.sqlite'), 'failed restore must not publish a destination database')
+
+  const tamperedPath = path.join(directory, 'tampered.sqlite.enc')
+  const tamperedBytes = await readFile(backupPath)
+  tamperedBytes[25] ^= 1
+  await writeFile(tamperedPath, tamperedBytes, { mode: 0o600 })
+  const tamperedRestorePath = path.join(directory, 'tampered-restore.sqlite')
+  const tamperedRestore = spawnSync(process.execPath, ['scripts/restore-db.js'], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    env: { ...process.env, BACKUP_FILE: tamperedPath, RESTORE_DATABASE_PATH: tamperedRestorePath, BACKUP_ENCRYPTION_KEY: key, RESTORE_CONFIRM: 'YES' },
+  })
+  assert.notEqual(tamperedRestore.status, 0, 'restore must reject modified ciphertext')
+  assert.ok(!(await readdir(directory)).includes('tampered-restore.sqlite'), 'failed authentication must not publish a database')
 })
