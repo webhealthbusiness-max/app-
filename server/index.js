@@ -669,8 +669,9 @@ const deliverQueuedEmails = async () => {
       LIMIT 10
     `).all()
     for (const email of queued) {
-      db.prepare('UPDATE notification_emails SET status = ? WHERE id = ? AND status = ?')
+      const claim = db.prepare('UPDATE notification_emails SET status = ? WHERE id = ? AND status = ?')
         .run('sending', email.id, 'queued')
+      if (!claim.changes) continue
       try {
         await emailTransport.sendMail({ from: emailFrom, to: email.recipient, subject: email.subject, text: email.message })
         db.prepare('DELETE FROM notification_emails WHERE id = ?').run(email.id)
@@ -1570,6 +1571,7 @@ app.delete('/api/data/delete', withUser, async (req, res, next) => {
     'subscriptions',
     'accounts',
     'bank_connections',
+    'notification_emails',
     'financial_profiles',
   ]
 
