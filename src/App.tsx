@@ -4,7 +4,7 @@ type Tab = 'Home' | 'Money' | 'Forecast' | 'Goals' | 'Tasks' | 'Insights' | 'Pla
 type TrackingMode = 'Manual' | 'Automatic' | 'Hybrid'
 type TaskPriority = 'High' | 'Medium' | 'Low'
 type TransactionType = 'Expense' | 'Income' | 'Transfer'
-type AuthMode = 'login' | 'signup'
+type AuthMode = 'login' | 'signup' | 'forgot' | 'reset'
 
 type Account = {
   id?: number
@@ -236,7 +236,9 @@ function App() {
   const [authMode, setAuthMode] = useState<AuthMode>('signup')
   const [authForm, setAuthForm] = useState({ name: '', email: '', password: '' })
   const [authError, setAuthError] = useState('')
+  const [authMessage, setAuthMessage] = useState('')
   const [authBusy, setAuthBusy] = useState(false)
+  const [authTokenFromLink, setAuthTokenFromLink] = useState('')
   const [isAuthenticated, setIsAuthenticated] = useState(Boolean(getStoredToken()))
   const [appReady, setAppReady] = useState(() => !Boolean(getStoredToken()))
   const [dashboard, setDashboard] = useState<DashboardData | null>(null)
@@ -535,31 +537,48 @@ function App() {
     })
   }
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const verificationToken = params.get('verifyEmail')
+    const resetToken = params.get('resetPassword')
+    if (verificationToken) {
+      setAuthBusy(true)
+      void fetchJson('/api/auth/verify-email', { method: 'POST', body: JSON.stringify({ token: verificationToken }) })
+        .then((result: { message: string }) => { setAuthMessage(result.message); setAuthMode('login') })
+        .catch((error) => setAuthError(error instanceof Error ? error.message : 'Could not verify email.'))
+        .finally(() => { setAuthBusy(false); window.history.replaceState({}, document.title, window.location.pathname) })
+    } else if (resetToken) {
+      setAuthTokenFromLink(resetToken)
+      setAuthMode('reset')
+      window.history.replaceState({}, document.title, window.location.pathname)
+    }
+  }, [])
+
   const handleAuthSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
     setAuthError('')
+    setAuthMessage('')
     setAuthBusy(true)
-
     try {
+      if (authMode === 'forgot') {
+        const result = await fetchJson<{ message: string }>('/api/auth/password-reset/request', { method: 'POST', body: JSON.stringify({ email: authForm.email }) })
+        setAuthMessage(result.message)
+        return
+      }
+      if (authMode === 'reset') {
+        const result = await fetchJson<{ message: string }>('/api/auth/password-reset/complete', { method: 'POST', body: JSON.stringify({ token: authTokenFromLink, password: authForm.password }) })
+        setAuthMessage(result.message)
+        setAuthMode('login')
+        setAuthTokenFromLink('')
+        setAuthForm((prev) => ({ ...prev, password: '' }))
+        return
+      }
       const payload = authMode === 'login'
-        ? await fetchJson<{ token: string; user: { name: string; email: string } }>('/api/auth/login', {
-            method: 'POST',
-            body: JSON.stringify({
-              email: authForm.email,
-              password: authForm.password,
-            }),
-          })
-        : await fetchJson<{ token: string; user: { name: string; email: string } }>('/api/auth/signup', {
-            method: 'POST',
-            body: JSON.stringify({
-              name: authForm.name,
-              email: authForm.email,
-              password: authForm.password,
-            }),
-          })
-
+        ? await fetchJson<{ token: string; user: { name: string; email: string } }>('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: authForm.email, password: authForm.password }) })
+        : await fetchJson<{ token?: string; message?: string; user?: { name: string; email: string } }>('/api/auth/signup', { method: 'POST', body: JSON.stringify({ name: authForm.name, email: authForm.email, password: authForm.password }) })
+      if (!payload.token || !payload.user) { setAuthMessage(payload.message || 'Check your email for next steps.'); return }
       localStorage.setItem('grounded-token', payload.token)
-      setForm((prev) => ({ ...prev, name: payload.user.name }))
+      setForm((prev) => ({ ...prev, name: payload.user!.name }))
       setIsAuthenticated(true)
       setOnboardingStep(0)
       setShowOnboarding(authMode === 'signup')
