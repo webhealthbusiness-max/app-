@@ -107,6 +107,7 @@ const emailTransport = process.env.SMTP_HOST
     })
   : null
 const emailFrom = process.env.SMTP_FROM || ''
+if (requireEmailVerification && !emailTransport) throw new Error('Email verification requires complete SMTP configuration.')
 const stripePrices = {
   monthly: process.env.STRIPE_PRICE_MONTHLY || '',
   annual: process.env.STRIPE_PRICE_ANNUAL || '',
