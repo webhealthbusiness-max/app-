@@ -20,3 +20,4 @@ jobs:
       - run: npm audit --audit-level=moderate
       - run: npm test
       - run: npm run build
+      - run: docker build --tag grounded-ci .
