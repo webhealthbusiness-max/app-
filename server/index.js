@@ -17,6 +17,13 @@ const __dirname = path.dirname(__filename)
 const app = express()
 const port = Number(process.env.PORT || 4000)
 const isProduction = process.env.NODE_ENV === 'production'
+const appEnvironment = process.env.APP_ENV || (isProduction ? 'production' : 'development')
+if (!['development', 'staging', 'production'].includes(appEnvironment)) {
+  throw new Error('APP_ENV must be development, staging, or production.')
+}
+if (isProduction && !['staging', 'production'].includes(appEnvironment)) {
+  throw new Error('APP_ENV must be staging or production when NODE_ENV=production.')
+}
 const requireEmailVerification = isProduction || process.env.AUTH_REQUIRE_EMAIL_VERIFICATION === 'true'
 if (isProduction && (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32)) {
   throw new Error('A JWT_SECRET of at least 32 characters is required in production.')
@@ -51,8 +58,11 @@ if (!['sandbox', 'development', 'production'].includes(plaidEnvironment)) {
 if (plaidConfigured && !/^[a-fA-F0-9]{64}$/.test(process.env.BANK_TOKEN_ENCRYPTION_KEY)) {
   throw new Error('BANK_TOKEN_ENCRYPTION_KEY must be exactly 64 hexadecimal characters (32 bytes).')
 }
-if (isProduction && plaidConfigured && plaidEnvironment !== 'production') {
+if (isProduction && appEnvironment === 'production' && plaidConfigured && plaidEnvironment !== 'production') {
   throw new Error('Production bank connections must use PLAID_ENV=production.')
+}
+if (isProduction && appEnvironment === 'staging' && plaidConfigured && plaidEnvironment !== 'sandbox') {
+  throw new Error('Staging bank connections must use PLAID_ENV=sandbox.')
 }
 if (process.env.PLAID_REDIRECT_URI) {
   let plaidRedirectUrl
@@ -65,8 +75,11 @@ if (process.env.PLAID_REDIRECT_URI) {
     throw new Error('Production PLAID_REDIRECT_URI must use HTTPS.')
   }
 }
-if (isProduction && !process.env.STRIPE_SECRET_KEY.startsWith('sk_live_')) {
+if (isProduction && appEnvironment === 'production' && !process.env.STRIPE_SECRET_KEY.startsWith('sk_live_')) {
   throw new Error('Production billing must use a live Stripe secret key.')
+}
+if (isProduction && appEnvironment === 'staging' && !process.env.STRIPE_SECRET_KEY.startsWith('sk_test_')) {
+  throw new Error('Staging billing must use a Stripe test secret key.')
 }
 const databasePath = process.env.DATABASE_PATH
   ? path.resolve(process.env.DATABASE_PATH)
