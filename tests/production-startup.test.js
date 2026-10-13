@@ -75,3 +75,13 @@ test('email worker does not send a queue item that was deleted before it was cla
   const source = await readFile(serverPath, 'utf8')
   assert.match(source, /const claim = db\.prepare\('UPDATE notification_emails SET status = \? WHERE id = \? AND status = \?'\)[\s\S]{0,120}if \(!claim\.changes\) continue/)
 })
+
+test('task completion update enforces ownership in the write query', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const source = await readFile(serverPath, 'utf8')
+  const routeStart = source.indexOf("app.patch('/api/tasks/:id/toggle'")
+  assert.notEqual(routeStart, -1, 'task toggle route must exist')
+  const routeEnd = source.indexOf('\napp.', routeStart + 1)
+  const route = source.slice(routeStart, routeEnd === -1 ? source.length : routeEnd)
+  assert.match(route, /UPDATE tasks SET completed = \\? WHERE id = \\? AND user_id = \\?/, 'task update must be scoped to the authenticated owner')
+})
