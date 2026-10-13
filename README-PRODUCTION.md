@@ -5,7 +5,7 @@ This guide lists the work required to take Grounded from its current development
 ## Current implementation and important limitations
 
 - The frontend is built with `npm run build`; the API is the Express server started with `npm start`.
-- The API does **not** serve the built frontend. Deploy the Vite `dist/` output to a static web host and the Node API to a Node-capable service, then configure the web host/reverse proxy to forward `/api/*` to the API. Keep the browser's `/api` requests on the same public origin.
+- When the Vite `dist/` folder exists, the Node API can serve the built frontend and SPA routes from the same origin; this supports a single-service deployment. If you instead host the frontend separately, configure same-origin `/api/*` routing through a reverse proxy and ensure authenticated API responses are never cached.
 - The API currently uses SQLite and is designed for one API instance. A persistent volume is necessary even for a single-instance deployment. Before scaling or requiring high availability, migrate to a managed database and replace SQLite-specific code.
 - Signup/login rate limits are kept in process memory; they do not coordinate across API instances or survive restarts.
 - Plaid syncing currently runs in the API process approximately every 15 minutes, in addition to connection-time and user-requested sync. It is not a durable job queue; process restarts or downtime pause automatic syncing.
