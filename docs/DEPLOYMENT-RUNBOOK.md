@@ -14,16 +14,16 @@ Grounded is not deployed yet. This document prepares the release process but doe
 
 - [ ] Choose a host that supports Node 22.12+, persistent storage, HTTPS, server-side secrets, health checks, and scheduled jobs or external backup scheduling.
 - [ ] Configure staging with synthetic users/data, Plaid Sandbox, Stripe test mode, a staging-only encryption key, and SMTP test delivery.
-- [ ] Set `NODE_ENV=production` only when exercising production startup checks on the staging deployment; never relax production checks just to get a test environment running.
+- [ ] Set `NODE_ENV=production` and `APP_ENV=staging` on the staging API. This keeps production security controls (including email verification and required secret/storage checks) enabled while explicitly requiring Stripe test-mode keys and Plaid Sandbox.
 - [ ] Configure `APP_BASE_URL` and `ALLOWED_ORIGINS` to exact HTTPS staging origins.
-- [ ] Set a random `JWT_SECRET` of at least 32 characters, persistent `DATABASE_PATH`, complete SMTP settings, Stripe test-mode values, and Plaid Sandbox values.
+- [ ] Set a random `JWT_SECRET` of at least 32 characters, persistent `DATABASE_PATH`, complete staging SMTP settings, Stripe test-mode values (`sk_test_...` and test Price IDs), and Plaid Sandbox values (`PLAID_ENV=sandbox`) with a staging-only token-encryption key.
 - [ ] Run `npm ci`, `npm audit --audit-level=moderate`, `npm test`, and `npm run build` on the exact release commit.
 - [ ] Verify external `/health` and `/api/health`, authentication, recovery/verification email, one-time token expiry, session revocation after password reset, ownership tests, checkout/webhook test mode, bank sandbox, export/deletion, and a restore drill.
 - [ ] Test restart, deploy rollback, database persistence, backup alerting, and restoring a backup into a separate staging database.
 
 ## Production gate
 
-Do not deploy or enable live financial services until all blocking security and recovery items are verified. Production requires a real HTTPS domain, reviewed privacy/terms and billing disclosures, an operational support/incident owner, SMTP domain authentication, verified off-host encrypted backups, and a successful restore drill. Plaid Production access requires provider approval.
+Do not deploy or enable live financial services until all blocking security and recovery items are verified. Set `APP_ENV=production` for the live API. Production requires a real HTTPS domain, reviewed privacy/terms and billing disclosures, an operational support/incident owner, SMTP domain authentication, verified off-host encrypted backups, and a successful restore drill. Production mode requires a Stripe live secret key and, when Plaid is configured, `PLAID_ENV=production`. Plaid Production access requires provider approval.
 
 ## Rollback
 
