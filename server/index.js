@@ -315,6 +315,16 @@ if (configuredTrustProxy !== undefined) {
   app.set('trust proxy', trustedHops)
 }
 
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('X-Frame-Options', 'DENY')
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
+  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()')
+  if (req.path.startsWith('/api')) res.setHeader('Cache-Control', 'no-store')
+  if (isProduction) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+  next()
+})
+
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin || allowedOrigins.includes(origin)) {
@@ -367,15 +377,6 @@ app.post('/api/billing/webhook', express.raw({ type: 'application/json', limit: 
   }
 })
 app.use(express.json({ limit: '1mb' }))
-app.use((req, res, next) => {
-  res.setHeader('X-Content-Type-Options', 'nosniff')
-  res.setHeader('X-Frame-Options', 'DENY')
-  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
-  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()')
-  if (req.path.startsWith('/api')) res.setHeader('Cache-Control', 'no-store')
-  if (isProduction) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
-  next()
-})
 
 const createUserToken = (user) => jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' })
 
