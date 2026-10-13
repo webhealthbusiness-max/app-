@@ -119,6 +119,7 @@ test('email verification is required, verification links are single-use, and pas
     .run(hashToken('c'.repeat(64)), userId, 'reset_password')
   dbForReset.close()
 
+
   const reset = await post('/api/auth/password-reset/complete', { token: 'b'.repeat(64), password: newPassword })
   assert.equal(reset.status, 200)
 
