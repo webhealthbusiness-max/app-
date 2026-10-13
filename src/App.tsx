@@ -543,7 +543,7 @@ function App() {
     const resetToken = params.get('resetPassword')
     if (verificationToken) {
       setAuthBusy(true)
-      void fetchJson('/api/auth/verify-email', { method: 'POST', body: JSON.stringify({ token: verificationToken }) })
+      void fetchJson<{ message: string }>('/api/auth/verify-email', { method: 'POST', body: JSON.stringify({ token: verificationToken }) })
         .then((result: { message: string }) => { setAuthMessage(result.message); setAuthMode('login') })
         .catch((error) => setAuthError(error instanceof Error ? error.message : 'Could not verify email.'))
         .finally(() => { setAuthBusy(false); window.history.replaceState({}, document.title, window.location.pathname) })
@@ -573,7 +573,7 @@ function App() {
         setAuthForm((prev) => ({ ...prev, password: '' }))
         return
       }
-      const payload = authMode === 'login'
+      const payload: { token?: string; message?: string; user?: { name: string; email: string } } = authMode === 'login'
         ? await fetchJson<{ token: string; user: { name: string; email: string } }>('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: authForm.email, password: authForm.password }) })
         : await fetchJson<{ token?: string; message?: string; user?: { name: string; email: string } }>('/api/auth/signup', { method: 'POST', body: JSON.stringify({ name: authForm.name, email: authForm.email, password: authForm.password }) })
       if (!payload.token || !payload.user) { setAuthMessage(payload.message || 'Check your email for next steps.'); return }
