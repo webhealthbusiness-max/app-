@@ -926,7 +926,7 @@ app.post('/api/auth/google', async (req, res, next) => {
     if (!user) {
       user = db.prepare('SELECT id, name, email, google_sub AS googleSub, session_version FROM users WHERE email = ?').get(safeEmail)
       if (user) {
-        db.prepare('UPDATE users SET google_sub = ? WHERE id = ?').run(claims.sub, user.id)
+        db.prepare('UPDATE users SET google_sub = ?, email_verified = 1 WHERE id = ?').run(claims.sub, user.id)
       } else {
         const safeName = sanitizeText(claims.name, safeEmail.split('@')[0]).slice(0, 80)
         user = db.transaction(() => {
