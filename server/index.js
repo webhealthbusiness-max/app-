@@ -379,7 +379,7 @@ app.post('/api/billing/webhook', express.raw({ type: 'application/json', limit: 
 })
 app.use(express.json({ limit: '1mb' }))
 
-const createUserToken = (user) => jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' })
+const createUserToken = (user) => jwt.sign({ id: user.id, email: user.email, sv: Number(user.session_version || 0) }, JWT_SECRET, { expiresIn: '7d' })
 
 const withUser = (req, res, next) => {
   const authHeader = req.headers.authorization || ''
@@ -401,8 +401,8 @@ const withUser = (req, res, next) => {
   if (!decoded || typeof decoded !== 'object' || !Number.isInteger(decoded.id)) {
     return res.status(401).json({ error: 'Invalid user session.' })
   }
-  const user = db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(decoded.id)
-  if (!user) return res.status(401).json({ error: 'Invalid user session.' })
+  const user = db.prepare('SELECT id, name, email, session_version FROM users WHERE id = ?').get(decoded.id)
+  if (!user || Number(decoded.sv || 0) !== Number(user.session_version || 0)) return res.status(401).json({ error: 'Invalid or revoked user session.' })
   req.user = user
   return next()
 }
@@ -598,6 +598,7 @@ db.exec(`
 `) 
 db.prepare("UPDATE notification_emails SET status = 'queued' WHERE status = 'sending'").run()
 const userColumns = new Set(db.pragma('table_info(users)').map((column) => column.name))
+if (!userColumns.has('session_version')) db.exec('ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0')
 if (!userColumns.has('email_verified')) db.exec('ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 1')
 db.exec(`CREATE TABLE IF NOT EXISTS auth_tokens (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, purpose TEXT NOT NULL CHECK (purpose IN ('verify_email', 'reset_password')), expires_at TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE); CREATE INDEX IF NOT EXISTS auth_tokens_user_purpose_idx ON auth_tokens(user_id, purpose);`)
 if (!userColumns.has('google_sub')) {
@@ -851,7 +852,7 @@ app.post('/api/auth/password-reset/complete', (req, res) => {
   const record = db.prepare("SELECT user_id FROM auth_tokens WHERE token_hash = ? AND purpose = 'reset_password' AND expires_at > CURRENT_TIMESTAMP").get(hashAuthToken(token))
   if (!record) return res.status(400).json({ error: 'Reset link is invalid or expired. Request another one.' })
   db.transaction(() => {
-    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(bcrypt.hashSync(password, 12), record.user_id)
+    db.prepare('UPDATE users SET password_hash = ?, session_version = session_version + 1 WHERE id = ?').run(bcrypt.hashSync(password, 12), record.user_id)
     db.prepare('DELETE FROM auth_tokens WHERE user_id = ?').run(record.user_id)
   })()
   return res.json({ message: 'Password reset successfully. Please log in with your new password.' })
@@ -881,7 +882,7 @@ app.post('/api/auth/login', (req, res) => {
   }
 
   if (requireEmailVerification && !user.email_verified) return res.status(403).json({ error: 'Please verify your email before logging in.', code: 'EMAIL_NOT_VERIFIED' })
-  const safeUser = { id: user.id, name: user.name, email: user.email }
+  const safeUser = { id: user.id, name: user.name, email: user.email, session_version: user.session_version || 0 }
   notifyUser(
     safeUser,
     'sign_in',
@@ -919,10 +920,10 @@ app.post('/api/auth/google', async (req, res, next) => {
       return res.status(401).json({ error: 'Google returned an invalid email address.' })
     }
 
-    let user = db.prepare('SELECT id, name, email, google_sub AS googleSub FROM users WHERE google_sub = ?').get(claims.sub)
+    let user = db.prepare('SELECT id, name, email, google_sub AS googleSub, session_version FROM users WHERE google_sub = ?').get(claims.sub)
     let created = false
     if (!user) {
-      user = db.prepare('SELECT id, name, email, google_sub AS googleSub FROM users WHERE email = ?').get(safeEmail)
+      user = db.prepare('SELECT id, name, email, google_sub AS googleSub, session_version FROM users WHERE email = ?').get(safeEmail)
       if (user) {
         db.prepare('UPDATE users SET google_sub = ? WHERE id = ?').run(claims.sub, user.id)
       } else {
@@ -931,13 +932,13 @@ app.post('/api/auth/google', async (req, res, next) => {
           const result = db.prepare('INSERT INTO users (name, email, password_hash, google_sub) VALUES (?, ?, ?, ?)')
             .run(safeName, safeEmail, bcrypt.hashSync(randomBytes(32).toString('hex'), 12), claims.sub)
           createUserSeedData(result.lastInsertRowid)
-          return db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(result.lastInsertRowid)
+          return db.prepare('SELECT id, name, email, session_version FROM users WHERE id = ?').get(result.lastInsertRowid)
         })()
         created = true
       }
     }
 
-    const safeUser = { id: user.id, name: user.name, email: user.email }
+    const safeUser = { id: user.id, name: user.name, email: user.email, session_version: user.session_version || 0 }
     notifyUser(
       safeUser,
       created ? 'account_created' : 'sign_in',
