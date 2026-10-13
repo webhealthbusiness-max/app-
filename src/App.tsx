@@ -1216,10 +1216,12 @@ function App() {
           </div>
 
           <form onSubmit={handleAuthSubmit} className="auth-form">
-            <div className="auth-toggle">
-              <button type="button" className={authMode === 'signup' ? 'toggle-button active' : 'toggle-button'} onClick={() => setAuthMode('signup')}>Sign up</button>
-              <button type="button" className={authMode === 'login' ? 'toggle-button active' : 'toggle-button'} onClick={() => setAuthMode('login')}>Log in</button>
-            </div>
+            {authMode !== 'forgot' && authMode !== 'reset' && (
+              <div className="auth-toggle">
+                <button type="button" className={authMode === 'signup' ? 'toggle-button active' : 'toggle-button'} onClick={() => { setAuthMode('signup'); setAuthError(''); setAuthMessage('') }}>Sign up</button>
+                <button type="button" className={authMode === 'login' ? 'toggle-button active' : 'toggle-button'} onClick={() => { setAuthMode('login'); setAuthError(''); setAuthMessage('') }}>Log in</button>
+              </div>
+            )}
 
             {authMode === 'signup' && (
               <label className="field">
@@ -1233,17 +1235,23 @@ function App() {
               <input autoComplete="email" maxLength={254} required type="email" value={authForm.email} onChange={(event) => setAuthForm((prev) => ({ ...prev, email: event.target.value }))} />
             </label>
 
-            <label className="field">
-              <span>Password</span>
-              <input autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'} maxLength={72} minLength={authMode === 'signup' ? 12 : 1} required type="password" value={authForm.password} onChange={(event) => setAuthForm((prev) => ({ ...prev, password: event.target.value }))} />
-            </label>
+            {authMode !== 'forgot' && (
+              <label className="field">
+                <span>Password{authMode === 'reset' ? ' (new password)' : ''}</span>
+                <input autoComplete={authMode === 'signup' || authMode === 'reset' ? 'new-password' : 'current-password'} maxLength={72} minLength={authMode === 'signup' || authMode === 'reset' ? 12 : 1} required type="password" value={authForm.password} onChange={(event) => setAuthForm((prev) => ({ ...prev, password: event.target.value }))} />
+              </label>
+            )}
 
             {authError && <div className="auth-error">{authError}</div>}
+            {authMessage && <div className="auth-success" role="status">{authMessage}</div>}
 
             <button type="submit" className="primary-button wide" disabled={authBusy}>
-              {authBusy ? 'Please wait…' : authMode === 'signup' ? 'Create account' : 'Log in'}
+              {authBusy ? 'Please wait…' : authMode === 'signup' ? 'Create account' : authMode === 'login' ? 'Log in' : authMode === 'forgot' ? 'Send reset link' : 'Reset password'}
             </button>
-            {googleClientId && (
+            {authMode === 'login' && <button type="button" className="text-button" onClick={() => { setAuthMode('forgot'); setAuthError(''); setAuthMessage('') }}>Forgot password?</button>}
+            {(authMode === 'forgot' || authMode === 'reset') && <button type="button" className="text-button" onClick={() => { setAuthMode('login'); setAuthError(''); setAuthMessage('') }}>Back to log in</button>}
+            {authMode === 'signup' && <p className="auth-hint">In production, we'll email you a verification link before your account can be used.</p>}
+            {googleClientId && authMode !== 'forgot' && authMode !== 'reset' && (
               <>
                 <div className="auth-divider"><span>or</span></div>
                 <div ref={googleButtonRef} className="google-signin-button" aria-label="Sign in with Google" />
