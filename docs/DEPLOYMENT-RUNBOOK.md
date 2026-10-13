@@ -4,22 +4,22 @@ Grounded is not deployed yet. This document prepares the release process but doe
 
 ## Architecture
 
-- Deploy the Vite frontend build output (`dist/`) to a static frontend host.
-- Deploy the Express API as a Node.js service using Node 22.12 or newer.
-- Route same-origin `/api/*` requests to the API; do not cache authenticated responses.
-- Until SQLite is replaced, run exactly one API instance and attach durable persistent storage for `DATABASE_PATH`.
+- The included `Dockerfile` builds the Vite frontend and Express API into one Node 22 container; the API serves `dist/` from the same origin when the build is present. This is the simplest deployment option.
+- Alternatively, deploy `dist/` to a static frontend host and the Express API to a separate Node 22.12+ service, routing same-origin `/api/*` requests to the API. Never cache authenticated responses.
+- Until SQLite is replaced, run exactly one API instance and attach durable, writable persistent storage at `/data` (the container default `DATABASE_PATH=/data/grounded.db`). The container runs as the non-root `node` user, so verify the mounted volume permissions.
 - Keep provider credentials and `JWT_SECRET` only in server-side secret managers, never in the frontend build.
 
 ## Staging first
 
-- [ ] Choose a host that supports Node 22.12+, persistent storage, HTTPS, server-side secrets, health checks, and scheduled jobs or external backup scheduling.
+- [ ] Choose a host that supports Docker or Node 22.12+, persistent storage, HTTPS, server-side secrets, health checks, and scheduled jobs or external backup scheduling.
+- [ ] Build the release image with `docker build --tag grounded .` and test its `/api/health` health check before pushing it to a container registry.
 - [ ] Configure staging with synthetic users/data, Plaid Sandbox, Stripe test mode, a staging-only encryption key, and SMTP test delivery.
 - [ ] Set `NODE_ENV=production` and `APP_ENV=staging` on the staging API. This keeps production security controls (including email verification and required secret/storage checks) enabled while explicitly requiring Stripe test-mode keys and Plaid Sandbox.
 - [ ] Configure `APP_BASE_URL` and `ALLOWED_ORIGINS` to exact HTTPS staging origins.
 - [ ] Set a random `JWT_SECRET` of at least 32 characters, persistent `DATABASE_PATH`, complete staging SMTP settings, Stripe test-mode values (`sk_test_...` and test Price IDs), and Plaid Sandbox values (`PLAID_ENV=sandbox`) with a staging-only token-encryption key.
 - [ ] Run `npm ci`, `npm audit --audit-level=moderate`, `npm test`, and `npm run build` on the exact release commit.
 - [ ] Verify external `/health` and `/api/health`, authentication, recovery/verification email, one-time token expiry, session revocation after password reset, ownership tests, checkout/webhook test mode, bank sandbox, export/deletion, and a restore drill.
-- [ ] Test restart, deploy rollback, database persistence, backup alerting, and restoring a backup into a separate staging database.
+- [ ] Test restart, deploy rollback, database persistence, backup alerting, and restoring a backup into a separate staging database. Configure the host's scheduler/cron service separately; the container does not schedule backups by itself.
 
 ## Production gate
 
