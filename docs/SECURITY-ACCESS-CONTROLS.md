@@ -42,4 +42,4 @@ Create at least two synthetic users, Alice and Bob. Seed each with unique accoun
 
 ## Known architecture limits
 
-SQLite and in-memory rate limits are currently single-instance oriented. The app needs a durable database/volume, encrypted off-host backups, a tested restore drill, email verification/password recovery, and a production hosting plan before launch. This checklist does not substitute for legal, privacy, compliance, or independent security review.
+SQLite and in-memory rate limits are currently single-instance oriented. The app still needs a durable database/volume, encrypted off-host backup scheduling, a completed restore drill, staging validation of email verification/password recovery, and a production hosting plan before launch. This checklist does not substitute for legal, privacy, compliance, or independent security review.
