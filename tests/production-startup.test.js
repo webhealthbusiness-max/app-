@@ -60,16 +60,18 @@ test('production startup requires a durable database path', () => {
   assert.match(result.stderr, /DATABASE_PATH must point to a persistent production data volume/)
 })
 
-test('account deletion removes queued notification emails', async () => {
+test('account deletion sends its receipt after cleanup rather than queueing a doomed email', async () => {
   const { readFile } = await import('node:fs/promises')
   const source = await readFile(serverPath, 'utf8')
   const deletionStart = source.indexOf("app.delete('/api/data/delete'")
   assert.notEqual(deletionStart, -1, 'account deletion route must exist')
-  const deletionEnd = source.indexOf("\napp.", deletionStart + 1)
+  const deletionEnd = source.indexOf("\\napp.", deletionStart + 1)
   const deletionRoute = source.slice(deletionStart, deletionEnd === -1 ? source.length : deletionEnd)
-  assert.match(deletionRoute, /'notification_emails'/, 'account deletion must remove queued emails')
+  assert.match(deletionRoute, /'notification_emails'/, 'account deletion must remove queued email records')
+  assert.match(deletionRoute, /const deletionEmail = \\{[\\s\\S]*to: req\\.user\\.email/, 'deletion receipt must preserve the account email before deleting the user')
+  assert.doesNotMatch(deletionRoute, /notifyUser\\(/, 'do not queue a notification that cleanup immediately deletes')
+  assert.ok(deletionRoute.indexOf('await emailTransport.sendMail') > deletionRoute.indexOf('db.transaction'), 'send the receipt only after account deletion succeeds')
 })
-
 test('email worker does not send a queue item that was deleted before it was claimed', async () => {
   const { readFile } = await import('node:fs/promises')
   const source = await readFile(serverPath, 'utf8')
