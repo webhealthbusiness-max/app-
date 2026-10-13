@@ -1,0 +1,26 @@
+{
+  "id": "/",
+  "name": "Grounded - Personal Finance",
+  "short_name": "Grounded",
+  "description": "Your calm, clear personal finance companion.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#397B4D",
+  "theme_color": "#397B4D",
+  "icons": [
+    {
+      "src": "/icons/grounded-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/grounded-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}

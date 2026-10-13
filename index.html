@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="Grounded personal finance companion" />
+    <meta name="theme-color" content="#397B4D" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <title>Grounded</title>
+    <link rel="icon" type="image/png" href="/grounded-logo-no-bg.png" />
+    <link rel="apple-touch-icon" href="/icons/grounded-180.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  </head>
+  <body>
+    <div id="app-splash" class="app-splash" role="status" aria-live="polite">
+      <div class="app-splash__content">
+        <p class="app-splash__tagline">Get grounded. Stay grounded.</p>
+        <div class="app-splash__mark">
+          <img class="app-splash__logo" src="/icons/grounded-splash-mark.png" alt="" />
+        </div>
+        <span class="app-splash__loader" aria-hidden="true">
+          <span></span>
+          <span></span>
+          <span></span>
+        </span>
+        <span class="sr-only">Getting your finances ready</span>
+      </div>
+    </div>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
