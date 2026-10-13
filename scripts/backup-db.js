@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3'
 import { createCipheriv, randomBytes } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
-import { appendFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { pipeline } from 'node:stream/promises'
@@ -14,12 +14,13 @@ if (!databasePath) throw new Error('DATABASE_PATH must identify the SQLite datab
 if (!/^[a-fA-F0-9]{64}$/.test(keyHex)) throw new Error('BACKUP_ENCRYPTION_KEY must be 64 hexadecimal characters (32 bytes).')
 const key = Buffer.from(keyHex, 'hex')
 const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-const temporaryDatabase = path.join(os.tmpdir(), 'grounded-backup-' + randomBytes(8).toString('hex') + '.sqlite')
 const outputPath = path.join(backupDirectory, 'grounded-' + timestamp + '.sqlite.enc')
 const magic = Buffer.from('GRDBAK1')
 const iv = randomBytes(12)
 
 await mkdir(backupDirectory, { recursive: true, mode: 0o700 })
+const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'grounded-backup-'))
+const temporaryDatabase = path.join(temporaryDirectory, 'snapshot.sqlite')
 try {
   const db = new Database(databasePath, { readonly: true, fileMustExist: true })
   try {
@@ -33,5 +34,5 @@ try {
   await appendFile(outputPath, cipher.getAuthTag())
   console.log('Encrypted database backup created:', outputPath)
 } finally {
-  await rm(temporaryDatabase, { force: true })
+  await rm(temporaryDirectory, { recursive: true, force: true })
 }
