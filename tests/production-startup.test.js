@@ -83,5 +83,5 @@ test('task completion update enforces ownership in the write query', async () =>
   assert.notEqual(routeStart, -1, 'task toggle route must exist')
   const routeEnd = source.indexOf('\napp.', routeStart + 1)
   const route = source.slice(routeStart, routeEnd === -1 ? source.length : routeEnd)
-  assert.match(route, /UPDATE tasks SET completed = \\? WHERE id = \\? AND user_id = \\?/, 'task update must be scoped to the authenticated owner')
+  assert.match(route, /UPDATE tasks SET completed = \? WHERE id = \? AND user_id = \?/, 'task update must be scoped to the authenticated owner')
 })
