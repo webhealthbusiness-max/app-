@@ -1,7 +1,7 @@
 import Database from 'better-sqlite3'
 import { createDecipheriv } from 'node:crypto'
-import { createReadStream, createWriteStream } from 'node:fs'
-import { open, rm, stat, writeFile } from 'node:fs/promises'
+import { constants, createReadStream, createWriteStream } from 'node:fs'
+import { chmod, copyFile, mkdir, open, rm, stat } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { pipeline } from 'node:stream/promises'
@@ -29,7 +29,7 @@ if (header.subarray(0, 7).toString() !== 'GRDBAK1') throw new Error('Unknown bac
 const iv = header.subarray(7, 19)
 const key = Buffer.from(keyHex, 'hex')
 const temporaryRestore = path.join(os.tmpdir(), 'grounded-restore-' + process.pid + '-' + Date.now() + '.sqlite')
-await import('node:fs/promises').then(({ mkdir }) => mkdir(path.dirname(path.resolve(destinationPath)), { recursive: true }))
+await mkdir(path.dirname(path.resolve(destinationPath)), { recursive: true })
 try {
   const decipher = createDecipheriv('aes-256-gcm', key, iv)
   decipher.setAuthTag(tag)
@@ -41,7 +41,8 @@ try {
   } finally {
     check.close()
   }
-  await writeFile(destinationPath, await (await import('node:fs/promises')).readFile(temporaryRestore), { flag: 'wx', mode: 0o600 })
+  await copyFile(temporaryRestore, destinationPath, constants.COPYFILE_EXCL)
+  await chmod(destinationPath, 0o600)
   console.log('Backup decrypted and integrity-checked. Restored database written to:', destinationPath)
 } finally {
   await rm(temporaryRestore, { force: true })
