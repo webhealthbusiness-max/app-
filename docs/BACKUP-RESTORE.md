@@ -25,7 +25,7 @@ Set `DATABASE_PATH` to the active SQLite database path and `BACKUP_ENCRYPTION_KE
 
     npm run backup
 
-The script uses SQLite's online backup API to produce a consistent temporary copy and encrypts it using AES-256-GCM. Output files use a `.sqlite.enc` suffix. Move/copy them to an off-host backup destination using the host's authenticated storage tooling. Verify that the destination object exists and has expected size before pruning older backups.
+The script uses SQLite's online backup API to produce a consistent temporary copy and encrypts it using AES-256-GCM. It writes to a private partial file and publishes the final `.sqlite.enc` file only after encryption completes, so an interrupted backup is not mistaken for a finished backup. Output files use a `.sqlite.enc` suffix. Move/copy them to an off-host backup destination using the host's authenticated storage tooling. Verify that the destination object exists and has expected size before pruning older backups.
 
 ## Restore to a new file (non-destructive)
 
@@ -55,4 +55,4 @@ The restore script refuses to overwrite an existing destination, authenticates/d
 
 ## Important limitations
 
-CI now exercises an encrypted backup and restore round-trip using a temporary SQLite database containing synthetic test data. This does not validate recovery of a real Grounded database or prove a production restore drill. A host-specific scheduled backup, off-host upload, alerting, retention enforcement, and staging restore drill still need to be configured and verified. Do not declare backups production-ready until the current CI checks and a staging restore drill pass.
+CI exercises an encrypted backup/restore round trip using a temporary SQLite database containing synthetic test data, verifies the restored SQLite integrity, refuses to overwrite a destination, and rejects a wrong encryption key or modified ciphertext. The restore utility copies the validated database to the new destination without loading the entire database into memory. This does not validate recovery of a real Grounded database or prove a production restore drill. A host-specific scheduled backup, off-host upload, alerting, retention enforcement, and staging restore drill still need to be configured and verified. Do not declare backups production-ready until the current CI checks and a staging restore drill pass.
