@@ -100,3 +100,17 @@ test('Stripe subscription persistence rejects billing identifiers owned by anoth
   assert.match(persistence, /conflictingBillingRecords\.some\(\(record\) => record\.user_id !== userId\)/, 'billing records must not be reassigned across users')
   assert.ok(persistence.indexOf('conflictingBillingRecords.some') < persistence.indexOf('INSERT INTO billing_subscriptions'), 'ownership conflict must be checked before persistence')
 })
+
+
+test('email verification and password recovery use expiring single-use hashed tokens and revoke sessions on reset', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const source = await readFile(serverPath, 'utf8')
+  assert.match(source, /CREATE TABLE IF NOT EXISTS auth_tokens/)
+  assert.match(source, /createHash\('sha256'\)\.update\(token\)\.digest\('hex'\)/)
+  assert.ok(source.includes("app.post('/api/auth/verify-email'"))
+  assert.ok(source.includes("app.post('/api/auth/password-reset/request'"))
+  assert.ok(source.includes("app.post('/api/auth/password-reset/complete'"))
+  assert.match(source, /expires_at > CURRENT_TIMESTAMP/)
+  assert.match(source, /session_version = session_version \+ 1/)
+  assert.match(source, /requireEmailVerification && !user\.email_verified/)
+})
