@@ -13,7 +13,7 @@ test('encrypted SQLite backup restores an integrity-checked copy without overwri
   const restoredPath = path.join(directory, 'restored.sqlite')
   const key = 'a'.repeat(64)
   const db = new Database(databasePath)
-  db.exec('CREATE TABLE sample (id INTEGER PRIMARY KEY, label TEXT NOT NULL); INSERT INTO sample (label) VALUES ("synthetic test data");')
+  db.exec("CREATE TABLE sample (id INTEGER PRIMARY KEY, label TEXT NOT NULL); INSERT INTO sample (label) VALUES ('synthetic test data');")
   db.close()
   t.after(() => rm(directory, { recursive: true, force: true }))
 
