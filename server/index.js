@@ -702,6 +702,14 @@ const persistStripeSubscription = (userId, customer, subscription) => {
   if (!db.prepare('SELECT 1 FROM users WHERE id = ?').get(userId)) return
   const previousStatus = db.prepare('SELECT status FROM billing_subscriptions WHERE user_id = ?').get(userId)?.status
   const customerId = typeof customer === 'string' ? customer : customer?.id
+  const conflictingBillingRecords = db.prepare(`
+    SELECT user_id FROM billing_subscriptions
+    WHERE (stripe_customer_id = ? AND ? IS NOT NULL)
+       OR (stripe_subscription_id = ? AND ? IS NOT NULL)
+  `).all(customerId || null, customerId || null, subscription.id || null, subscription.id || null)
+  if (conflictingBillingRecords.some((record) => record.user_id !== userId)) {
+    throw new Error('Stripe subscription/customer is already associated with a different Grounded user.')
+  }
   const priceId = subscription.items?.data?.[0]?.price?.id || null
   const currentPeriodEnd = subscription.current_period_end
     ? new Date(subscription.current_period_end * 1000).toISOString()
