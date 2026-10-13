@@ -157,6 +157,7 @@ Required by the current production startup checks:
 
 ```text
 NODE_ENV=production
+APP_ENV=production
 PORT=<port supplied by host>
 JWT_SECRET=<random secret, at least 32 characters>
 ALLOWED_ORIGINS=https://your-domain.example
