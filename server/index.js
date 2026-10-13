@@ -1665,7 +1665,10 @@ app.patch('/api/tasks/:id/toggle', withUser, (req, res) => {
   if (!task) {
     return res.status(404).json({ error: 'Task not found.' })
   }
-  db.prepare('UPDATE tasks SET completed = ? WHERE id = ?').run(task.completed ? 0 : 1, task.id)
+  const result = db.prepare('UPDATE tasks SET completed = ? WHERE id = ? AND user_id = ?').run(task.completed ? 0 : 1, task.id, req.user.id)
+  if (!result.changes) {
+    return res.status(404).json({ error: 'Task not found.' })
+  }
   return res.json({ success: true })
 })
 
