@@ -12,7 +12,9 @@
     "test": "node --test",
     "preview": "vite preview --host 0.0.0.0",
     "server": "node --env-file-if-exists=.env server/index.js",
-    "start": "node --env-file-if-exists=.env server/index.js"
+    "start": "node --env-file-if-exists=.env server/index.js",
+    "backup": "node scripts/backup-db.js",
+    "restore": "node scripts/restore-db.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
