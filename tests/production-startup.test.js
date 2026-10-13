@@ -6,6 +6,7 @@ import path from 'node:path'
 
 const serverPath = fileURLToPath(new URL('../server/index.js', import.meta.url))
 const productionConfigKeys = [
+  'APP_ENV',
   'JWT_SECRET',
   'ALLOWED_ORIGINS',
   'DATABASE_PATH',
@@ -58,6 +59,15 @@ test('production startup requires a durable database path', () => {
   })
   assert.notEqual(result.status, 0, 'server must not start without a configured persistent database path')
   assert.match(result.stderr, /DATABASE_PATH must point to a persistent production data volume/)
+})
+
+test('production-hardening staging mode explicitly requires test providers while live mode requires live providers', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const source = await readFile(serverPath, 'utf8')
+  assert.match(source, /appEnvironment === 'staging'[\\s\\S]*?Staging billing must use a Stripe test secret key/)
+  assert.match(source, /appEnvironment === 'production'[\\s\\S]*?Production billing must use a live Stripe secret key/)
+  assert.match(source, /appEnvironment === 'staging'[\\s\\S]*?Staging bank connections must use PLAID_ENV=sandbox/)
+  assert.match(source, /appEnvironment === 'production'[\\s\\S]*?Production bank connections must use PLAID_ENV=production/)
 })
 
 test('account deletion sends its receipt after cleanup rather than queueing a doomed email', async () => {
