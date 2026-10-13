@@ -5,3 +5,7 @@ data/*.db
 .env.*
 !.env.example
 *.log
+
+# Encrypted backups and restore artifacts must never be committed.
+backups/
+*.sqlite.enc
