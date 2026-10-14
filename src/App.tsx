@@ -234,6 +234,13 @@ function App() {
   const googleButtonRef = useRef<HTMLDivElement>(null)
   const splashStartedAt = useRef(performance.now())
   const [authMode, setAuthMode] = useState<AuthMode>('signup')
+  const [authView, setAuthView] = useState<'auth' | 'request-reset' | 'complete-reset'>(() =>
+    new URLSearchParams(window.location.search).has('resetToken') ? 'complete-reset' : 'auth',
+  )
+  const [resetToken, setResetToken] = useState(() => new URLSearchParams(window.location.search).get('resetToken') || '')
+  const [resetEmail, setResetEmail] = useState('')
+  const [resetPassword, setResetPassword] = useState('')
+  const [resetPasswordConfirm, setResetPasswordConfirm] = useState('')
   const [authForm, setAuthForm] = useState({ name: '', email: '', password: '' })
   const [authError, setAuthError] = useState('')
   const [authBusy, setAuthBusy] = useState(false)
@@ -533,6 +540,53 @@ function App() {
         focusAreas: exists ? prev.focusAreas.filter((entry) => entry !== item) : [...prev.focusAreas, item],
       }
     })
+  }
+
+  const handlePasswordResetRequest = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setAuthError('')
+    setAuthBusy(true)
+    try {
+      await fetchJson<{ message: string }>('/api/auth/password-reset/request', {
+        method: 'POST',
+        body: JSON.stringify({ email: resetEmail }),
+      })
+      setAuthError('If an account exists for that email, reset instructions will be sent. Check your inbox.')
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : 'Could not request a password reset.')
+    } finally {
+      setAuthBusy(false)
+    }
+  }
+
+  const handlePasswordResetComplete = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setAuthError('')
+    if (resetPassword !== resetPasswordConfirm) {
+      setAuthError('The passwords do not match.')
+      return
+    }
+    setAuthBusy(true)
+    try {
+      const result = await fetchJson<{ message: string }>('/api/auth/password-reset/complete', {
+        method: 'POST',
+        body: JSON.stringify({ token: resetToken, password: resetPassword }),
+      })
+      setAuthView('auth')
+      setAuthMode('login')
+      setAuthForm((prev) => ({ ...prev, password: '' }))
+      setResetPassword('')
+      setResetPasswordConfirm('')
+      setResetToken('')
+      const cleanUrl = new URL(window.location.href)
+      cleanUrl.searchParams.delete('resetToken')
+      window.history.replaceState({}, '', cleanUrl.toString())
+      setAuthError(result.message)
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : 'Could not reset the password.')
+    } finally {
+      setAuthBusy(false)
+    }
   }
 
   const handleAuthSubmit = async (event: React.FormEvent) => {
@@ -1196,6 +1250,7 @@ function App() {
             </div>
           </div>
 
+          {authView === 'auth' ? (
           <form onSubmit={handleAuthSubmit} className="auth-form">
             <div className="auth-toggle">
               <button type="button" className={authMode === 'signup' ? 'toggle-button active' : 'toggle-button'} onClick={() => setAuthMode('signup')}>Sign up</button>
@@ -1219,6 +1274,12 @@ function App() {
               <input autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'} maxLength={72} minLength={authMode === 'signup' ? 12 : 1} required type="password" value={authForm.password} onChange={(event) => setAuthForm((prev) => ({ ...prev, password: event.target.value }))} />
             </label>
 
+            {authMode === 'login' && (
+              <button type="button" className="toggle-button" onClick={() => { setResetEmail(authForm.email); setAuthView('request-reset'); setAuthError('') }}>
+                Forgot password?
+              </button>
+            )}
+
             {authError && <div className="auth-error">{authError}</div>}
 
             <button type="submit" className="primary-button wide" disabled={authBusy}>
@@ -1231,6 +1292,40 @@ function App() {
               </>
             )}
           </form>
+          ) : authView === 'request-reset' ? (
+            <form onSubmit={handlePasswordResetRequest} className="auth-form">
+              <h2>Reset your password</h2>
+              <p>Enter the email address associated with your Grounded account.</p>
+              <label className="field">
+                <span>Email</span>
+                <input autoComplete="email" maxLength={254} required type="email" value={resetEmail} onChange={(event) => setResetEmail(event.target.value)} />
+              </label>
+              {authError && <div className="auth-error" role="status">{authError}</div>}
+              <button type="submit" className="primary-button wide" disabled={authBusy}>
+                {authBusy ? 'Please wait…' : 'Send reset link'}
+              </button>
+              <button type="button" className="toggle-button" onClick={() => { setAuthView('auth'); setAuthError('') }}>Back to log in</button>
+            </form>
+          ) : (
+            <form onSubmit={handlePasswordResetComplete} className="auth-form">
+              <h2>Choose a new password</h2>
+              <p>Your reset link expires after 30 minutes and can only be used once.</p>
+              <label className="field">
+                <span>New password</span>
+                <input autoComplete="new-password" required type="password" minLength={12} maxLength={72} value={resetPassword} onChange={(event) => setResetPassword(event.target.value)} />
+              </label>
+              <label className="field">
+                <span>Confirm new password</span>
+                <input autoComplete="new-password" required type="password" minLength={12} maxLength={72} value={resetPasswordConfirm} onChange={(event) => setResetPasswordConfirm(event.target.value)} />
+              </label>
+              {authError && <div className="auth-error" role="alert">{authError}</div>}
+              <button type="submit" className="primary-button wide" disabled={authBusy || !resetToken}>
+                {authBusy ? 'Updating password…' : 'Update password'}
+              </button>
+              {!resetToken && <p>This reset link is missing or invalid. Request a new one.</p>}
+              <button type="button" className="toggle-button" onClick={() => { setAuthView('request-reset'); setAuthError('') }}>Request another reset link</button>
+            </form>
+          )}
         </div>
       </div>
     )
