@@ -572,6 +572,7 @@ function App() {
 
   const logout = async () => {
     const token = getStoredToken()
+    let revokeFailed = false
     if (token) {
       try {
         await fetchJson('/api/auth/logout', {
@@ -579,8 +580,7 @@ function App() {
           headers: { Authorization: `Bearer ${token}` },
         })
       } catch {
-        setAuthError('Could not securely end your session. Check your connection and try again.')
-        return
+        revokeFailed = true
       }
     }
     localStorage.removeItem('grounded-token')
@@ -589,7 +589,7 @@ function App() {
     setBilling({ plan: 'free', status: 'free', currentPeriodEnd: null, prices: { monthly: 5.99, annual: 59.99 } })
     setPremiumInsights(null)
     setAuthMode('login')
-    setAuthError('')
+    setAuthError(revokeFailed ? 'You were signed out on this device, but the server could not confirm session revocation. If this device is shared, reconnect and sign in again to refresh your session.' : '')
   }
 
   const loadNotifications = async () => {
