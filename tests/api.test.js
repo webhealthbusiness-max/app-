@@ -478,5 +478,5 @@ test('rejects an invalid trusted proxy hop count', () => {
   const env = { ...process.env, NODE_ENV: 'test', TRUST_PROXY_HOPS: 'not-a-number' }
   const result = spawnSync(process.execPath, ['server/index.js'], { cwd: process.cwd(), env, encoding: 'utf8' })
   assert.notEqual(result.status, 0)
-  assert.match(result.stderr, /TRUST_PROXY_HOPS must be an integer between 0 and 10/)
+  assert.match(result.stderr, /TRUST_PROXY_HOPS must be an integer between 1 and 5/)
 })
