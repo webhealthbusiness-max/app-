@@ -15,6 +15,14 @@ import { fileURLToPath } from 'node:url'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const app = express()
+const trustProxyHopsValue = process.env.TRUST_PROXY_HOPS
+if (trustProxyHopsValue !== undefined && trustProxyHopsValue !== '') {
+  const trustProxyHops = Number(trustProxyHopsValue)
+  if (!Number.isInteger(trustProxyHops) || trustProxyHops < 1 || trustProxyHops > 5) {
+    throw new Error('TRUST_PROXY_HOPS must be an integer between 1 and 5.')
+  }
+  app.set('trust proxy', trustProxyHops)
+}
 const port = Number(process.env.PORT || 4000)
 const isProduction = process.env.NODE_ENV === 'production'
 if (isProduction && (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32)) {

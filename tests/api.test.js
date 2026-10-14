@@ -57,6 +57,7 @@ test('auth, finance data isolation, validation, export, and deletion', async (t)
     env: {
       ...process.env,
       NODE_ENV: 'test',
+      TRUST_PROXY_HOPS: '1',
       PORT: String(port),
       DATABASE_PATH: databasePath,
       JWT_SECRET: 'test-secret-with-at-least-thirty-two-characters',
@@ -102,6 +103,17 @@ test('auth, finance data isolation, validation, export, and deletion', async (t)
     }
   }
   assert.equal(ready, true, `API did not start. Output: ${serverOutput}`)
+
+  const rateLimitProbe = (ip) => fetch(`${baseUrl}/api/auth/signup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': ip },
+    body: JSON.stringify({ name: 'Rate Limit Probe', email: `probe-${ip.replaceAll('.', '-')}@example.com`, password: 'short' }),
+  })
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    assert.equal((await rateLimitProbe('198.51.100.10')).status, 400)
+  }
+  assert.equal((await rateLimitProbe('198.51.100.10')).status, 429)
+  assert.equal((await rateLimitProbe('198.51.100.11')).status, 400)
 
   const signup = async (name, email) => {
     const response = await fetch(`${baseUrl}/api/auth/signup`, {
@@ -460,4 +472,11 @@ test('bank-link credentials require a valid encryption key', () => {
   const result = spawnSync(process.execPath, ['server/index.js'], { cwd: process.cwd(), env, encoding: 'utf8' })
   assert.notEqual(result.status, 0)
   assert.match(result.stderr, /BANK_TOKEN_ENCRYPTION_KEY must be exactly 64 hexadecimal characters/)
+})
+
+test('rejects an invalid trusted proxy hop count', () => {
+  const env = { ...process.env, NODE_ENV: 'test', TRUST_PROXY_HOPS: 'not-a-number' }
+  const result = spawnSync(process.execPath, ['server/index.js'], { cwd: process.cwd(), env, encoding: 'utf8' })
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /TRUST_PROXY_HOPS must be an integer between 1 and 5/)
 })
