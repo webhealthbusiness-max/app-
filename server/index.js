@@ -900,7 +900,7 @@ app.post('/api/auth/password-reset/request', async (req, res) => {
         '',
         'If you did not request this, you can ignore this email.',
         'For your security, the link can only be used once.',
-      ].join('\\n'),
+      ].join('\n'),
     })
   } catch (error) {
     console.error('Password-reset email delivery failed:', error?.code || 'Unknown SMTP error')
