@@ -374,8 +374,8 @@ function App() {
           name: response.user.name,
           focusAreas: response.profile.focusAreas || defaultForm.focusAreas,
         })
-      } catch (error) {
-        console.error(error)
+      } catch {
+        console.error('Dashboard loading failed.')
         setAuthError('Your session expired. Please log in again.')
         localStorage.removeItem('grounded-token')
         setIsAuthenticated(false)
