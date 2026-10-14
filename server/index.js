@@ -7,7 +7,7 @@ import nodemailer from 'nodemailer'
 import { OAuth2Client } from 'google-auth-library'
 import { Configuration, PlaidApi, PlaidEnvironments, Products } from 'plaid'
 import Database from 'better-sqlite3'
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -377,7 +377,8 @@ app.use((req, res, next) => {
   next()
 })
 
-const createUserToken = (user) => jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' })
+const createUserToken = (user) => jwt.sign({ id: user.id, email: user.email, jti: randomBytes(16).toString('hex') }, JWT_SECRET, { expiresIn: '7d' })
+const hashAuthToken = (token) => createHash('sha256').update(token).digest('hex')
 
 const withUser = (req, res, next) => {
   const authHeader = req.headers.authorization || ''
@@ -401,7 +402,12 @@ const withUser = (req, res, next) => {
   }
   const user = db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(decoded.id)
   if (!user) return res.status(401).json({ error: 'Invalid user session.' })
+  const tokenHash = hashAuthToken(token)
+  const revoked = db.prepare('SELECT 1 FROM revoked_tokens WHERE token_hash = ? AND expires_at > ?').get(tokenHash, Date.now())
+  if (revoked) return res.status(401).json({ error: 'Session has been revoked. Please log in again.' })
   req.user = user
+  req.authTokenHash = tokenHash
+  req.authTokenExpiresAt = decoded.exp * 1000
   return next()
 }
 
@@ -441,6 +447,11 @@ db.exec(`
     password_hash TEXT NOT NULL,
     google_sub TEXT UNIQUE,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS revoked_tokens (
+    token_hash TEXT PRIMARY KEY,
+    expires_at INTEGER NOT NULL
   );
 
   CREATE TABLE IF NOT EXISTS financial_profiles (
@@ -824,6 +835,13 @@ app.post('/api/auth/login', (req, res) => {
     `A sign-in to your Grounded account was completed at ${new Date().toUTCString()} using email and password. If this was not you, change your password and contact support.`,
   )
   return res.json({ token: createUserToken(safeUser), user: safeUser })
+})
+
+app.post('/api/auth/logout', withUser, (req, res) => {
+  db.prepare('DELETE FROM revoked_tokens WHERE expires_at <= ?').run(Date.now())
+  db.prepare('INSERT OR REPLACE INTO revoked_tokens (token_hash, expires_at) VALUES (?, ?)')
+    .run(req.authTokenHash, req.authTokenExpiresAt)
+  return res.json({ success: true })
 })
 
 app.post('/api/auth/google', async (req, res, next) => {

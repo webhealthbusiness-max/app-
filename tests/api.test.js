@@ -185,6 +185,17 @@ test('auth, finance data isolation, validation, export, and deletion', async (t)
     body: JSON.stringify({ email: 'test@example.com', password: 'correct-horse-battery' }),
   })
   assert.equal(passwordLogin.status, 200)
+  const passwordLoginBody = await passwordLogin.json()
+  const logoutResponse = await fetch(`${baseUrl}/api/auth/logout`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${passwordLoginBody.token}` },
+  })
+  assert.equal(logoutResponse.status, 200)
+  assert.deepEqual(await logoutResponse.json(), { success: true })
+  const revokedSessionResponse = await fetch(`${baseUrl}/api/me`, {
+    headers: { Authorization: `Bearer ${passwordLoginBody.token}` },
+  })
+  assert.equal(revokedSessionResponse.status, 401)
   const signInNotifications = await fetch(`${baseUrl}/api/notifications`, { headers: firstHeaders })
   assert.ok((await signInNotifications.json()).notifications.some((item) => item.event === 'sign_in'))
 
