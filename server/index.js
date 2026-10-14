@@ -377,7 +377,7 @@ app.use((req, res, next) => {
   next()
 })
 
-const createUserToken = (user) => jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' })
+const createUserToken = (user) => jwt.sign({ id: user.id, email: user.email, jti: randomBytes(16).toString('hex') }, JWT_SECRET, { expiresIn: '7d' })
 const hashAuthToken = (token) => createHash('sha256').update(token).digest('hex')
 
 const withUser = (req, res, next) => {
