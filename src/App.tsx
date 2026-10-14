@@ -570,7 +570,19 @@ function App() {
     }
   }
 
-  const logout = () => {
+  const logout = async () => {
+    const token = getStoredToken()
+    if (token) {
+      try {
+        await fetchJson('/api/auth/logout', {
+          method: 'POST',
+          headers: { Authorization: `Bearer ${token}` },
+        })
+      } catch {
+        setAuthError('Could not securely end your session. Check your connection and try again.')
+        return
+      }
+    }
     localStorage.removeItem('grounded-token')
     setIsAuthenticated(false)
     setDashboard(null)
