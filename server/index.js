@@ -7,7 +7,7 @@ import nodemailer from 'nodemailer'
 import { OAuth2Client } from 'google-auth-library'
 import { Configuration, PlaidApi, PlaidEnvironments, Products } from 'plaid'
 import Database from 'better-sqlite3'
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -377,7 +377,15 @@ app.use((req, res, next) => {
   next()
 })
 
-const createUserToken = (user) => jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' })
+const createUserToken = (user) => {
+  const currentUser = db.prepare('SELECT auth_version FROM users WHERE id = ?').get(user.id)
+  if (!currentUser) throw new Error('Cannot create a session for a missing user.')
+  return jwt.sign(
+    { id: user.id, email: user.email, authVersion: currentUser.auth_version },
+    JWT_SECRET,
+    { expiresIn: '7d' },
+  )
+}
 
 const withUser = (req, res, next) => {
   const authHeader = req.headers.authorization || ''
@@ -399,9 +407,17 @@ const withUser = (req, res, next) => {
   if (!decoded || typeof decoded !== 'object' || !Number.isInteger(decoded.id)) {
     return res.status(401).json({ error: 'Invalid user session.' })
   }
-  const user = db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(decoded.id)
+  const user = db.prepare('SELECT id, name, email, auth_version FROM users WHERE id = ?').get(decoded.id)
   if (!user) return res.status(401).json({ error: 'Invalid user session.' })
-  req.user = user
+
+  const tokenVersionIsValid =
+    decoded.authVersion === user.auth_version ||
+    (decoded.authVersion === undefined && user.auth_version === 0)
+  if (!tokenVersionIsValid) {
+    return res.status(401).json({ error: 'Your session is no longer valid. Please log in again.' })
+  }
+
+  req.user = { id: user.id, name: user.name, email: user.email }
   return next()
 }
 
@@ -442,6 +458,18 @@ db.exec(`
     google_sub TEXT UNIQUE,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
   );
+
+  CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    expires_at INTEGER NOT NULL,
+    used_at INTEGER,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+  );
+  CREATE INDEX IF NOT EXISTS password_reset_tokens_user_id_idx
+    ON password_reset_tokens(user_id);
 
   CREATE TABLE IF NOT EXISTS financial_profiles (
     user_id INTEGER PRIMARY KEY,
@@ -599,6 +627,9 @@ const userColumns = new Set(db.pragma('table_info(users)').map((column) => colum
 if (!userColumns.has('google_sub')) {
   db.exec('ALTER TABLE users ADD COLUMN google_sub TEXT')
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_google_sub_unique ON users(google_sub) WHERE google_sub IS NOT NULL')
+}
+if (!userColumns.has('auth_version')) {
+  db.exec('ALTER TABLE users ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 0')
 }
 const accountColumns = new Set(db.pragma('table_info(accounts)').map((column) => column.name))
 for (const [column, definition] of [
@@ -824,6 +855,116 @@ app.post('/api/auth/login', (req, res) => {
     `A sign-in to your Grounded account was completed at ${new Date().toUTCString()} using email and password. If this was not you, change your password and contact support.`,
   )
   return res.json({ token: createUserToken(safeUser), user: safeUser })
+})
+
+const PASSWORD_RESET_TTL_MS = 30 * 60 * 1000
+const PASSWORD_RESET_RESPONSE = {
+  message: 'If an account exists for that email, instructions to reset the password will be sent.',
+}
+
+app.post('/api/auth/password-reset/request', async (req, res) => {
+  if (!enforceRateLimit(req, 'password-reset-request', 5)) {
+    return res.status(429).json({ error: 'Too many password-reset requests. Please wait and try again.' })
+  }
+
+  const email = sanitizeText(req.body?.email).toLowerCase()
+  if (!isValidEmail(email) || !emailTransport) return res.json(PASSWORD_RESET_RESPONSE)
+
+  const user = db.prepare('SELECT id, email FROM users WHERE email = ?').get(email)
+  if (!user) return res.json(PASSWORD_RESET_RESPONSE)
+
+  const rawToken = randomBytes(32).toString('hex')
+  const tokenHash = createHash('sha256').update(rawToken).digest('hex')
+  const expiresAt = Date.now() + PASSWORD_RESET_TTL_MS
+
+  db.transaction(() => {
+    db.prepare('DELETE FROM password_reset_tokens WHERE user_id = ?').run(user.id)
+    db.prepare(`
+      INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+      VALUES (?, ?, ?)
+    `).run(user.id, tokenHash, expiresAt)
+  })()
+
+  const resetUrl = new URL('/', appBaseUrl)
+  resetUrl.searchParams.set('resetToken', rawToken)
+
+  try {
+    await emailTransport.sendMail({
+      from: emailFrom,
+      to: user.email,
+      subject: 'Reset your Grounded password',
+      text: [
+        'We received a request to reset your Grounded password.',
+        '',
+        `Use this link within 30 minutes: ${resetUrl.toString()}`,
+        '',
+        'If you did not request this, you can ignore this email.',
+        'For your security, the link can only be used once.',
+      ].join('\\n'),
+    })
+  } catch (error) {
+    console.error('Password-reset email delivery failed:', error?.code || 'Unknown SMTP error')
+    db.prepare('DELETE FROM password_reset_tokens WHERE token_hash = ?').run(tokenHash)
+  }
+
+  return res.json(PASSWORD_RESET_RESPONSE)
+})
+
+app.post('/api/auth/password-reset/complete', (req, res) => {
+  if (!enforceRateLimit(req, 'password-reset-complete', 10)) {
+    return res.status(429).json({ error: 'Too many password-reset attempts. Please wait and try again.' })
+  }
+
+  const token = req.body?.token
+  const password = req.body?.password
+  if (
+    typeof token !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(token) ||
+    typeof password !== 'string' ||
+    password.length < 12 ||
+    Buffer.byteLength(password, 'utf8') > 72
+  ) {
+    return res.status(400).json({ error: 'A valid reset token and a password of 12–72 bytes are required.' })
+  }
+
+  const tokenHash = createHash('sha256').update(token).digest('hex')
+  const resetRecord = db.prepare(`
+    SELECT id, user_id FROM password_reset_tokens
+    WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?
+  `).get(tokenHash, Date.now())
+
+  if (!resetRecord) {
+    return res.status(400).json({ error: 'This reset link is invalid, expired, or already used. Request a new one.' })
+  }
+
+  const passwordHash = bcrypt.hashSync(password, 12)
+  try {
+    db.transaction(() => {
+      const validToken = db.prepare(`
+        SELECT id, user_id FROM password_reset_tokens
+        WHERE id = ? AND token_hash = ? AND used_at IS NULL AND expires_at > ?
+      `).get(resetRecord.id, tokenHash, Date.now())
+      if (!validToken) throw new Error('RESET_TOKEN_INVALID')
+
+      db.prepare(`
+        UPDATE users
+        SET password_hash = ?, auth_version = auth_version + 1
+        WHERE id = ?
+      `).run(passwordHash, validToken.user_id)
+
+      db.prepare('UPDATE password_reset_tokens SET used_at = ? WHERE id = ?')
+        .run(Date.now(), validToken.id)
+      db.prepare('DELETE FROM password_reset_tokens WHERE user_id = ? AND id != ?')
+        .run(validToken.user_id, validToken.id)
+    })()
+  } catch (error) {
+    if (error?.message === 'RESET_TOKEN_INVALID') {
+      return res.status(400).json({ error: 'This reset link is invalid, expired, or already used. Request a new one.' })
+    }
+    throw error
+  }
+
+  return res.json({ message: 'Password updated successfully. Please log in with your new password.' })
 })
 
 app.post('/api/auth/google', async (req, res, next) => {
