@@ -18,8 +18,8 @@ const app = express()
 const trustProxyHopsValue = process.env.TRUST_PROXY_HOPS
 if (trustProxyHopsValue !== undefined && trustProxyHopsValue !== '') {
   const trustProxyHops = Number(trustProxyHopsValue)
-  if (!Number.isInteger(trustProxyHops) || trustProxyHops < 0 || trustProxyHops > 10) {
-    throw new Error('TRUST_PROXY_HOPS must be an integer between 0 and 10.')
+  if (!Number.isInteger(trustProxyHops) || trustProxyHops < 1 || trustProxyHops > 5) {
+    throw new Error('TRUST_PROXY_HOPS must be an integer between 1 and 5.')
   }
   app.set('trust proxy', trustProxyHops)
 }
