@@ -270,7 +270,8 @@ test('auth, finance data isolation, validation, export, and deletion', async (t)
   const subscriptionEvent = JSON.stringify({
     id: 'evt_test_subscription_active',
     object: 'event',
-    created: Math.floor(Date.now() / 1000),\n    type: 'customer.subscription.updated',
+    created: Math.floor(Date.now() / 1000),
+    type: 'customer.subscription.updated',
     data: {
       object: {
         id: 'sub_test_plus',
@@ -406,7 +407,8 @@ test('auth, finance data isolation, validation, export, and deletion', async (t)
   const lateSubscriptionEvent = JSON.stringify({
     id: 'evt_late_deleted_user',
     object: 'event',
-    created: Math.floor(Date.now() / 1000),\n    type: 'customer.subscription.updated',
+    created: Math.floor(Date.now() / 1000),
+    type: 'customer.subscription.updated',
     data: {
       object: {
         id: 'sub_deleted_user',
