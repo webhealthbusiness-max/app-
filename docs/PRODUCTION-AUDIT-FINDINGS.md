@@ -1,6 +1,6 @@
 # Grounded production audit findings
 
-**Scope:** static review of the ci-smoke-tests branch. This is not a penetration test, a verified live-site probe, or a legal/compliance opinion. Follow-up fixes have since been committed on this branch for findings 1, 2, and task field bounds under finding 13; CI passed for commit 3bc9fc88fee878ae8006f99b8f78bab086b41428. The CSP report-only baseline, improved deployment asset MIME-type diagnostics, and manual workflow trigger were added afterward; these latest changes still require a new CI run and staging browser review. Other items below remain open unless explicitly marked otherwise.
+**Scope:** static review of the ci-smoke-tests branch. This is not a penetration test, a verified live-site probe, or a legal/compliance opinion. Follow-up fixes are committed on this branch for findings 1 and 2, task field bounds under finding 13, the CSP report-only baseline, deployment asset MIME-type diagnostics, and a manual CI trigger. GitHub Actions completed successfully for current head `f65aab3d482ccc2cd94fc06c4a0724279b5e21c2`, including `npm ci`, `npm audit --audit-level=moderate`, `npm test`, frontend build, and Docker build. Other items below remain open unless explicitly marked otherwise.
 
 ## Release recommendation
 
@@ -20,12 +20,12 @@
 
 **Failure mode:** the next sync starts from the same old cursor and can repeat the first 5,000 changes indefinitely, so later transaction changes may never arrive. The endpoint reports complete:false but has no durable continuation mechanism for the next batch.
 
-**Status: PARTIAL FIX COMMITTED; mocked pagination test added in commit `32fd980a`.** The sync persists the latest processed cursor with transaction changes, so the next run can continue rather than restarting from the old cursor. The new mocked test exercises an 11-page sequence, confirms a run stops at 10 pages, and confirms the next run resumes from the saved cursor. **Still required:** verify the new test in CI and add coverage for added/modified/removed transaction persistence, provider errors/retries, and crash semantics.
+**Status: FIX AND REGRESSION COVERAGE COMMITTED.** The sync persists the latest processed cursor atomically with transaction changes, so a bounded run continues from the saved cursor. `tests/plaid-sync.integration.test.js` uses synthetic provider data and SQLite to verify a 12-page sync across a database close/reopen boundary, duplicate transaction replay, added/modified/removed changes, and a provider failure on page 2 followed by a safe retry. On failure, neither the fetched page changes nor the cursor advance is committed. `tests/plaid-sync.test.js` also covers the 11-page bounded-resume behavior. GitHub Actions passed `npm test` for current head `f65aab3d482ccc2cd94fc06c4a0724279b5e21c2`. The restart test closes/reopens SQLite and reconstructs the sync service in one test process; it is not a process-supervisor or deployed-container restart test.
 
 ### 3. Browser bearer token is stored in localStorage
 **Evidence:** src/App.tsx reads/writes grounded-token in localStorage; that JWT authorizes finance-data API requests.
 
-**Failure mode:** successful script injection or a compromised third-party script can read and exfiltrate a reusable bearer token. The app loads Google/Plaid browser scripts and currently does not set a Content-Security-Policy response header.
+**Failure mode:** successful script injection or a compromised third-party script can read and exfiltrate a reusable bearer token. The app loads Google/Plaid browser scripts. A `Content-Security-Policy-Report-Only` baseline is now present but does not block script execution or centrally collect violations.
 
 **Fix:** review a migration to Secure, HttpOnly, SameSite cookies with CSRF protection and session rotation/revocation, or explicitly document why bearer tokens are retained and implement a strict XSS defense strategy. Add a carefully tested CSP compatible with Vite, Google Identity Services, Plaid Link, fonts, and API origins. Avoid unsafe-inline/eval unless justified. Audit user-text rendering and add browser security tests. Do not blindly switch to cookies without CSRF design.
 
