@@ -140,12 +140,12 @@ test('Plaid sync commits changes and the latest processed cursor in one transact
   const { readFile } = await import('node:fs/promises')
   const source = await readFile(serverPath, 'utf8')
   const syncStart = source.indexOf('const syncPlaidConnection =')
-  const syncEnd = source.indexOf('\\nconst bankSyncTimer', syncStart)
+  const syncEnd = source.indexOf('\nconst bankSyncTimer', syncStart)
   assert.notEqual(syncStart, -1, 'Plaid sync function must exist')
   const sync = source.slice(syncStart, syncEnd)
-  assert.match(sync, /fetchPlaidTransactionBatch\\([\\s\\S]*maxPages: 10/, 'sync must fetch bounded resumable batches')
-  assert.match(sync, /\\.run\\(cursor, connection\\.item_id, connection\\.user_id\\)/, 'sync must save the latest processed cursor even when another batch remains')
-  assert.match(sync, /db\\.transaction\\(\\(\\) => \\{[\\s\\S]*UPDATE bank_connections[\\s\\S]*\\.run\\(cursor, connection\\.item_id, connection\\.user_id\\)/, 'page mutations and checkpoint must commit atomically')
+  assert.match(sync, /fetchPlaidTransactionBatch\([\s\S]*maxPages: 10/, 'sync must fetch bounded resumable batches')
+  assert.match(sync, /\.run\(cursor, connection\.item_id, connection\.user_id\)/, 'sync must save the latest processed cursor even when another batch remains')
+  assert.match(sync, /db\.transaction\(\(\) => \{[\s\S]*UPDATE bank_connections[\s\S]*\.run\(cursor, connection\.item_id, connection\.user_id\)/, 'page mutations and checkpoint must commit atomically')
 })
 
 test('task creation bounds every user-controlled text field', async () => {
