@@ -24,6 +24,9 @@ if (!['development', 'staging', 'production'].includes(appEnvironment)) {
 if (isProduction && !['staging', 'production'].includes(appEnvironment)) {
   throw new Error('APP_ENV must be staging or production when NODE_ENV=production.')
 }
+if (!isProduction && appEnvironment !== 'development') {
+  throw new Error('APP_ENV=staging or production requires NODE_ENV=production.')
+}
 const requireEmailVerification = isProduction || process.env.AUTH_REQUIRE_EMAIL_VERIFICATION === 'true'
 if (isProduction && (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32)) {
   throw new Error('A JWT_SECRET of at least 32 characters is required in production.')
@@ -1190,7 +1193,7 @@ const syncPlaidConnection = (connection) => {
         UPDATE bank_connections
         SET cursor = ?, status = 'connected', last_synced_at = CURRENT_TIMESTAMP
         WHERE item_id = ? AND user_id = ?
-      `).run(hasMore ? connection.cursor : cursor, connection.item_id, connection.user_id)
+      `).run(cursor, connection.item_id, connection.user_id)
     })()
     return { addedCount, modifiedCount, complete: !hasMore }
   })().finally(() => activeBankSyncs.delete(connection.item_id))
