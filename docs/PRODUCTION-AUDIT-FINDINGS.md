@@ -1,6 +1,6 @@
 # Grounded production audit findings
 
-**Scope:** source review of `origin/ci-smoke-tests` plus remediation in draft PR #10, branch `codex/comprehensive-remediation`. This is not a penetration test or legal/compliance opinion. GitHub Actions run [#242](https://github.com/webhealthbusiness-max/app-/actions/runs/38681796307) passed on head `b605a20f587b1061227a612c8bac27c5dca61b45`: `npm ci`, `npm audit --audit-level=moderate`, all `npm test` tests, deployment-checker syntax, frontend build, and Docker build. The audit environment has no local Node/npm/browser executable, so tests/builds were verified in CI rather than locally. Staging/provider, production-configuration, backup/restore, and legal/privacy checks remain outside this CI evidence.
+**Scope:** source review of `origin/ci-smoke-tests` plus remediation in draft PR #10, branch `codex/comprehensive-remediation`. This is not a penetration test or legal/compliance opinion. GitHub Actions run [#250](https://github.com/webhealthbusiness-max/app-/actions/runs/38682693656) passed on code head `0c7c6a998052d589ac7e58a204e7a5d809b2d6e2`: `npm ci`, `npm audit --audit-level=moderate`, all `npm test` tests, deployment-checker syntax, frontend build, Playwright Chromium E2E, and Docker build. A checksum-verified Node 22.23.3 runtime was unpacked under `/tmp` for local build and targeted test runs. The local browser could not launch because `libnspr4.so` is absent; full tests, Playwright E2E, and Docker build were verified in CI. Staging/provider, production-configuration, backup/restore, and legal/privacy checks remain outside this CI evidence.
 
 ## Release recommendation
 
@@ -22,7 +22,7 @@
 ### 1. Production environment consistency
 **Evidence:** safeguards depend on `NODE_ENV=production`; `APP_ENV=staging|production` is rejected unless `NODE_ENV=production`.
 
-**Status: FIX IMPLEMENTED IN DRAFT PR #10; CI PASSED.** Startup also rejects unknown `NODE_ENV` values so a typo such as `Production` cannot silently select development defaults. Regression tests cover mismatched and invalid values and passed in CI run #242.
+**Status: FIX IMPLEMENTED IN DRAFT PR #10; CI PASSED.** Startup also rejects unknown `NODE_ENV` values so a typo such as `Production` cannot silently select development defaults. Regression tests cover mismatched and invalid values and passed in CI run #250.
 
 ### 2. Plaid sync can get stuck after more than 5,000 changes
 **Evidence:** syncPlaidConnection in server/index.js stops after 10 pages of 500 transactions. When hasMore remains true, it stores the original connection.cursor instead of the last processed cursor.
@@ -34,14 +34,14 @@
 ### 3. Browser session token exposure
 **Evidence:** the previous frontend stored the production bearer JWT in localStorage, where script injection could read it.
 
-**Status: FIX IMPLEMENTED IN DRAFT PR #10; CI PASSED.** Production now issues Secure, HttpOnly, SameSite session cookies, signed CSRF tokens, revokes sessions on logout, and no longer returns JWTs in JSON. The frontend uses cookies in production and sessionStorage only in non-production. Unit and synthetic production integration tests passed in CI run #242. Browser E2E and staging compatibility with Google and Plaid remain unverified. CSP remains report-only and does not block script execution.
+**Status: FIX IMPLEMENTED IN DRAFT PR #10; CI PASSED.** Production now issues Secure, HttpOnly, SameSite session cookies, signed CSRF tokens, revokes sessions on logout, and no longer returns JWTs in JSON. The frontend uses cookies in production and sessionStorage only in non-production. Unit and synthetic production integration tests passed in CI run #250. The added browser E2E suite covers built asset delivery and mocked login/dashboard/recovery; staging compatibility with Google and Plaid remains unverified. CSP remains report-only and does not block script execution.
 
 ### 4. In-memory rate limits are not a production abuse-control system
 **Evidence:** the previous implementation used a process-local Map keyed by IP, which reset on restart and lacked per-account limits.
 
 **Failure mode:** restarts/replicas bypass limits; distributed attackers can spray password-reset/verification emails; users behind one shared IP can block each other; stale map entries are cleaned only when the map reaches its bucket cap.
 
-**Status: SINGLE-HOST FIX IMPLEMENTED IN DRAFT PR #10; CI PASSED.** Rate-limit buckets persist in SQLite across app restarts, are HMAC-keyed rather than storing raw emails/IPs, bound key cardinality, and apply account/user keys alongside IP keys on signup, login, recovery, banking, and billing routes. Persistence, expiry, and key-bound tests passed in CI run #242. Production now defaults to one trusted proxy hop, matching the documented Caddy-to-app topology; verify the actual chain and 429 behavior in staging. SQLite rate limits are only appropriate for a single-host/single-instance model; multi-host deployments require shared storage.
+**Status: SINGLE-HOST FIX IMPLEMENTED IN DRAFT PR #10; CI PASSED.** Rate-limit buckets persist in SQLite across app restarts, are HMAC-keyed rather than storing raw emails/IPs, bound key cardinality, and apply account/user keys alongside IP keys on signup, login, recovery, banking, and billing routes. Persistence, expiry, and key-bound tests passed in CI run #250. Production now defaults to one trusted proxy hop, matching the documented Caddy-to-app topology; verify the actual chain and 429 behavior in staging. SQLite rate limits are only appropriate for a single-host/single-instance model; multi-host deployments require shared storage.
 
 ### 5. Production privacy/legal documents are not ready
 **Evidence:** server/index.js labels the privacy page a pre-launch disclosure and says production retention, backup-erasure policy, and independent privacy review are missing. Terms are explicitly drafts. README-PRODUCTION.md lists counsel review and retention/deletion review as outstanding.
@@ -53,14 +53,14 @@
 ## P2 — resolve before public launch
 
 ### 6. Browser security policy and hardening validation are incomplete
-**Evidence:** server sets nosniff, frame denial, referrer policy, permissions policy, and HSTS in production. A CSP `Report-Only` baseline was added, but enforcement and browser end-to-end tests are still absent.
+**Evidence:** server sets nosniff, frame denial, referrer policy, permissions policy, and HSTS in production. A CSP `Report-Only` baseline was added, but enforcement and staging compatibility validation are still absent.
 
-**Status: PARTIAL FIX COMMITTED; CI PASSED.** Production emits an initial `Content-Security-Policy-Report-Only` baseline without `unsafe-eval`. This policy does not block violations; without a configured `report-uri`/`report-to` collector, violations are visible primarily in browser developer tools rather than centrally collected. `style-src` now avoids broad inline style permission while `style-src-attr` allows React's inline style attributes. The deployment checker fails if the page serves `/src/main.tsx` rather than a built bundle. **Still required:** validate in staging with Google/Plaid flows, add deliberate violation collection if desired, then refine and enforce a tested CSP; consider COOP/CORP where compatible and add browser E2E tests.
+**Status: PARTIAL FIX COMMITTED; CI PASSED.** Production emits an initial `Content-Security-Policy-Report-Only` baseline without `unsafe-eval`. This policy does not block violations; without a configured `report-uri`/`report-to` collector, violations are visible primarily in browser developer tools rather than centrally collected. `style-src` now avoids broad inline style permission while `style-src-attr` allows React's inline style attributes. **Still required:** validate in staging with Google/Plaid flows, add deliberate violation collection if desired, then refine and enforce a tested CSP; consider COOP/CORP where compatible.
 
 ### 7. CI does not prove production is healthy
-**Evidence:** CI performs install, audit, Node tests, Vite build, and Docker build. It does not verify IONOS reverse proxy rules, SMTP delivery, external provider webhooks, or a staging restore drill.
+**Evidence:** CI performs install, audit, Node tests, Vite build, Chromium E2E against mocked synthetic API responses, and Docker build. It does not verify IONOS reverse proxy rules, SMTP delivery, external provider webhooks, or a staging restore drill.
 
-**Status: PARTIAL FIX COMMITTED.** The credential-free CI workflow can be manually dispatched. The deployment checker detects failed assets, incorrect JavaScript/CSS content types, and same-origin CORS rejection for assets and `/api/health`. It has now reproduced the current live CORS failure in read-only checks. **Still required:** configure the exact production allowlist with owner approval, run the checker after the change, add staging browser E2E using synthetic data and test credentials, and verify auth flows and cache headers. Never expose live provider secrets to untrusted PR jobs.
+**Status: PARTIAL FIX COMMITTED; CI PASSED.** The credential-free CI workflow can be manually dispatched. The deployment checker detects failed assets, incorrect JavaScript/CSS content types, and same-origin CORS rejection for assets and `/api/health`; it reproduces the current live CORS failure. Playwright Chromium tests verify built asset status/MIME types, the signup screen/splash, mocked login-to-dashboard initialization, and generic password recovery. **Still required:** configure the exact production allowlist, run the checker after the change, and verify provider flows and cache headers in staging. Never expose live provider secrets to untrusted PR jobs.
 
 ### 8. Backup scripts are not a backup service
 **Evidence:** npm run backup creates an encrypted backup file but does not schedule it, transfer backups off-host, enforce retention, alert on failure/staleness, or prove a restore against the deployed volume.
@@ -77,7 +77,7 @@
 ### 10. Database migration management
 **Evidence:** the previous startup path ran schema changes directly and had no migration history.
 
-**Status: BASELINE MIGRATION FRAMEWORK IMPLEMENTED; CI PASSED.** `server/migrations.js` records ordered schema versions and applies the existing baseline/legacy upgrades in one SQLite transaction. Regression tests cover upgrading a legacy schema while preserving synthetic user data, idempotent restart, and refusing a newer schema version; these passed in CI run #242. This framework does not define destructive down migrations; rollback must use the documented backup/restore process. Test it against a production-like sanitized copy and ensure only one app instance runs migrations before release.
+**Status: BASELINE MIGRATION FRAMEWORK IMPLEMENTED; CI PASSED.** `server/migrations.js` records ordered schema versions and applies the existing baseline/legacy upgrades in one SQLite transaction. Regression tests cover upgrading a legacy schema while preserving synthetic user data, idempotent restart, and refusing a newer schema version; these passed in CI run #250. This framework does not define destructive down migrations; rollback must use the documented backup/restore process. Test it against a production-like sanitized copy and ensure only one app instance runs migrations before release.
 
 ### 11. Deployment settings and filesystem protections need verification
 **Evidence:** SQLite is single-instance; database path is environment-defined; reverse-proxy trust is configurable. Repository review cannot verify actual IONOS permissions, durable storage, firewall, DNS, TLS, or publish directory.
@@ -94,7 +94,7 @@
 ### 13. Validate financial/date fields consistently
 **Evidence:** create routes sanitize strings but have inconsistent length bounds, enum validation, and date validation. Goals accept sanitized date/contribution strings without validating date format; task title/category/due strings lack maximum lengths; bill/income/subscription routes need consistent enum/range validation.
 
-**Status: PARTIAL FIX IMPLEMENTED IN DRAFT PR #10; CI PASSED.** Shared validators now enforce cents precision, maximum values, calendar dates, frequency/status enums, and boolean types on account, goal, bill, income, and subscription creation. The bill/income/subscription forms use constrained frequency and date inputs. API regressions and frontend type/build checks passed in CI run #242. Money remains stored as SQLite `REAL`, so an integer-cents migration and finance domain rules remain open.
+**Status: PARTIAL FIX IMPLEMENTED IN DRAFT PR #10; CI PASSED.** Shared validators now enforce cents precision, maximum values, calendar dates, frequency/status enums, and boolean types on account, goal, bill, income, and subscription creation. The bill/income/subscription forms use constrained frequency and date inputs. API regressions and frontend type/build checks passed in CI run #250. Money remains stored as SQLite `REAL`, so an integer-cents migration and finance domain rules remain open.
 
 ### 14. Finance calculations need explicit domain rules and tests
 **Evidence:** dashboard safeToSpend/projectedBalance use profile arithmetic; manually entered transactions update current_money, while Plaid imports store transaction rows and connected-account balances separately. This may be intentional but the source-of-truth distinction needs tests.
@@ -130,6 +130,6 @@ These cannot be conclusively determined from source alone:
 2. Validate staging with synthetic users and provider test modes, including browser login/recovery/dashboard, Google/Plaid compatibility, Stripe checkout/webhook/cancellation, and SMTP delivery.
 3. Complete a sanitized production-like migration upgrade and a scheduled encrypted off-host backup/restore drill; verify retention, alerts, RPO/RTO, and rollback.
 4. Decide financial source-of-truth rules, money precision migration, transfer/refund/pending semantics, and bank-balance freshness; add calculation tests after the rules are agreed.
-5. Browser E2E tests have been added for built asset MIME/status, signup screen/splash, login/dashboard initialization, and generic password recovery. CI must pass the new browser job; staging provider flows, accessibility, responsive behavior, and real-device checks remain open.
+5. Browser E2E tests for built asset MIME/status, signup screen/splash, login/dashboard initialization, and generic password recovery passed in CI run #250. Staging provider flows, accessibility, responsive behavior, and real-device checks remain open.
 6. Complete independent security review and qualified legal/privacy review; finalize support, deletion/retention, and incident-response ownership.
 7. Keep PR #10 and PR #1 unmerged and production unchanged until the release gates have evidence and the release owner approves deployment.
