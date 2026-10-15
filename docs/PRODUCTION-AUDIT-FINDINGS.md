@@ -25,7 +25,7 @@
 ### 3. Browser bearer token is stored in localStorage
 **Evidence:** src/App.tsx reads/writes grounded-token in localStorage; that JWT authorizes finance-data API requests.
 
-**Failure mode:** successful script injection or a compromised third-party script can read and exfiltrate a reusable bearer token. The app loads Google/Plaid browser scripts and currently does not set a Content-Security-Policy response header.
+**Failure mode:** successful script injection or a compromised third-party script can read and exfiltrate a reusable bearer token. The app loads Google/Plaid browser scripts and emits a Content-Security-Policy-Report-Only baseline; report-only policy does not block injected scripts.
 
 **Fix:** review a migration to Secure, HttpOnly, SameSite cookies with CSRF protection and session rotation/revocation, or explicitly document why bearer tokens are retained and implement a strict XSS defense strategy. Add a carefully tested CSP compatible with Vite, Google Identity Services, Plaid Link, fonts, and API origins. Avoid unsafe-inline/eval unless justified. Audit user-text rendering and add browser security tests. Do not blindly switch to cookies without CSRF design.
 
