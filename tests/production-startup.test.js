@@ -154,3 +154,13 @@ test('task creation bounds every user-controlled text field', async () => {
   assert.match(route, /safeCategory\.length > 80/)
   assert.match(route, /safeDue\.length > 80/)
 })
+
+
+test('production responses start CSP validation in report-only mode without unsafe-eval', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const source = await readFile(serverPath, 'utf8')
+  assert.match(source, /Content-Security-Policy-Report-Only/)
+  assert.match(source, /script-src 'self' https:\/\/accounts\.google\.com https:\/\/cdn\.plaid\.com/)
+  assert.match(source, /frame-ancestors 'none'/)
+  assert.doesNotMatch(source, /script-src[^\n]*unsafe-eval/)
+})
