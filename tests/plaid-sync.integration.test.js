@@ -139,6 +139,5 @@ test('duplicate pages and retry after partial provider failure preserve data and
   assert.equal(replayed.complete, true)
   assert.equal(readConnection(db).cursor, 'c3')
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM transactions WHERE provider_transaction_id = 'txn-replayed'").get().count, 1)
-  assert.equal(requestedCursors, undefined)
   assert.deepEqual(requestedCursors, [null, 'c1', null, 'c1', 'c2'])
 })
