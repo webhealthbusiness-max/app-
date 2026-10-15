@@ -81,7 +81,7 @@ for (const url of references) {
   const contentType = result.contentType.toLowerCase()
   const expectedType = pathname.endsWith('.css')
     ? 'text/css'
-    : /\\.(?:m?js)$/.test(pathname)
+    : /\.(?:m?js)$/.test(pathname)
       ? 'javascript'
       : null
   const wrongType = result.ok && expectedType === 'text/css' && !contentType.includes('text/css')
