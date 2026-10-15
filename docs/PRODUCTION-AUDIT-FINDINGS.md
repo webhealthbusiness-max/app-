@@ -1,6 +1,6 @@
 # Grounded production audit findings
 
-**Scope:** static review of the ci-smoke-tests branch. This is not a penetration test, a verified live-site probe, or a legal/compliance opinion. Follow-up fixes have since been committed on this branch for findings 1, 2, and task field bounds under finding 13; CI passed for commit 3bc9fc88fee878ae8006f99b8f78bab086b41428. The CSP report-only baseline added afterward still requires its own CI run and staging browser review. Other items below remain open unless explicitly marked otherwise.
+**Scope:** static review of the ci-smoke-tests branch. This is not a penetration test, a verified live-site probe, or a legal/compliance opinion. Follow-up fixes have since been committed on this branch for findings 1, 2, and task field bounds under finding 13; CI passed for commit 3bc9fc88fee878ae8006f99b8f78bab086b41428. The CSP report-only baseline, improved deployment asset MIME-type diagnostics, and manual workflow trigger were added afterward; these latest changes still require a new CI run and staging browser review. Other items below remain open unless explicitly marked otherwise.
 
 ## Release recommendation
 
@@ -48,12 +48,12 @@
 ### 6. Browser security policy and hardening validation are incomplete
 **Evidence:** server sets nosniff, frame denial, referrer policy, permissions policy, and HSTS in production, but no CSP. The reviewed CI configuration has no browser end-to-end tests.
 
-**Status: PARTIAL FIX COMMITTED after the last CI-passing SHA.** Production now emits an initial `Content-Security-Policy-Report-Only` baseline without `unsafe-eval`; it is not an enforcement policy and may generate browser reports until provider compatibility is checked. **Still required:** run CI for the latest commit, validate in staging with Google/Plaid flows, then refine and enforce a tested CSP; consider COOP/CORP where compatible and add browser E2E tests.
+**Status: PARTIAL FIX COMMITTED after the last CI-passing SHA.** Production now emits an initial `Content-Security-Policy-Report-Only` baseline without `unsafe-eval`; it is not an enforcement policy and may generate browser reports until provider compatibility is checked. The latest code also allows manually triggering CI from GitHub Actions. **Still required:** run CI for the latest commit, validate in staging with Google/Plaid flows, then refine and enforce a tested CSP; consider COOP/CORP where compatible and add browser E2E tests.
 
 ### 7. CI does not prove production is healthy
 **Evidence:** CI performs install, audit, Node tests, Vite build, and Docker build. It does not verify IONOS reverse proxy rules, SMTP delivery, external provider webhooks, or a staging restore drill.
 
-**Fix:** keep CI credential-free; add a staging-only smoke/E2E workflow using synthetic data and test credentials. Add post-deploy checks for built HTML, same-origin hashed assets, /api/health, auth flows, and cache headers. Never expose live provider secrets to untrusted PR jobs.
+**Status: PARTIAL FIX COMMITTED.** The credential-free CI workflow can now be manually dispatched, and the public deployment checker detects failed asset requests plus incorrect JavaScript/CSS content types that can indicate an SPA fallback or host MIME rule. **Still required:** run the latest CI, execute the checker from a network that can reach the public domain, add a staging-only smoke/E2E workflow using synthetic data and test credentials, and verify `/api/health`, auth flows, and cache headers. Never expose live provider secrets to untrusted PR jobs.
 
 ### 8. Backup scripts are not a backup service
 **Evidence:** npm run backup creates an encrypted backup file but does not schedule it, transfer backups off-host, enforce retention, alert on failure/staleness, or prove a restore against the deployed volume.
