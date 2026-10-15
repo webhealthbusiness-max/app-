@@ -115,7 +115,8 @@ test('Stripe subscription persistence rejects billing identifiers owned by anoth
 test('email verification and password recovery use expiring single-use hashed tokens and revoke sessions on reset', async () => {
   const { readFile } = await import('node:fs/promises')
   const source = await readFile(serverPath, 'utf8')
-  assert.match(source, /CREATE TABLE IF NOT EXISTS auth_tokens/)
+  const migrationSource = await readFile(new URL('../server/migrations.js', import.meta.url), 'utf8')
+  assert.match(migrationSource, /CREATE TABLE IF NOT EXISTS auth_tokens/)
   assert.match(source, /createHash\('sha256'\)\.update\(token\)\.digest\('hex'\)/)
   assert.ok(source.includes("app.post('/api/auth/verify-email'"))
   assert.ok(source.includes("app.post('/api/auth/password-reset/request'"))
