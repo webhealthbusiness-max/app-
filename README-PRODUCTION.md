@@ -7,7 +7,7 @@ This guide lists the work required to take Grounded from its current development
 - The frontend is built with `npm run build`; the API is the Express server started with `npm start`.
 - When the Vite `dist/` folder exists, the Node API can serve the built frontend and SPA routes from the same origin; this supports a single-service deployment. If you instead host the frontend separately, configure same-origin `/api/*` routing through a reverse proxy and ensure authenticated API responses are never cached.
 - The API currently uses SQLite and is designed for one API instance. A persistent volume is necessary even for a single-instance deployment. Before scaling or requiring high availability, migrate to a managed database and replace SQLite-specific code.
-- Signup/login rate limits are kept in process memory; they do not coordinate across API instances or survive restarts.
+- Authentication, recovery, banking, and billing rate limits persist in SQLite across process restarts and combine pseudonymous IP and account keys. They support the documented single-instance deployment only; multiple API instances need a shared limiter.
 - Plaid syncing currently runs in the API process approximately every 15 minutes, in addition to connection-time and user-requested sync. It is not a durable job queue; process restarts or downtime pause automatic syncing.
 - In-app notifications are implemented. Outbound email requires SMTP configuration.
 - Google sign-in is optional and requires OAuth credentials.
@@ -29,7 +29,7 @@ This guide lists the work required to take Grounded from its current development
 - [ ] If temporarily using one API instance with SQLite, place `DATABASE_PATH` on the provider's durable persistent volume, confirm the volume survives deploys/restarts, restrict filesystem access, and document the single-instance outage and scaling limits.
 - [ ] Add an automated encrypted backup schedule, defined retention period, access controls, and a documented restore procedure. Perform a restore drill before launch and on a recurring schedule.
 - [ ] Add a reviewed schema migration process. Test migrations against a production-like copy before deployment; keep rollback/restore instructions.
-- [ ] Replace the in-memory rate limiter with shared storage before scaling beyond one process. Review limits for auth, Google sign-in, checkout, notifications, and bank-link/sync endpoints.
+- [x] Persist rate-limit buckets in SQLite with HMAC-pseudonymized IP/account keys and per-user limits for auth, recovery, checkout, and bank-link/sync endpoints. This supports the documented single-host deployment only; shared storage is still required before multi-host scaling. Verify trusted proxy IP handling and 429 behavior in staging.
 - [ ] Use a durable background job/worker for scheduled bank syncs and email retries if those operations must continue through API restarts or multiple instances. Ensure only one worker processes each user's bank cursor at a time.
 - [ ] Confirm the frontend static host forwards `/api/*` to the API without caching authenticated responses. The API sets `Cache-Control: no-store` on API paths; verify the CDN/proxy honors it.
 - [ ] Configure reverse-proxy trust only for the actual number of trusted hops using `TRUST_PROXY_HOPS`; do not trust arbitrary client-supplied forwarding headers.
@@ -198,7 +198,7 @@ After setting production environment variables, restart/redeploy the API. Rebuil
 ## Authentication recovery and encrypted backups
 
 - Production signup now requires email verification; the API creates a single-use token whose hash is stored in SQLite, and login is blocked until verification. Verification links expire after 24 hours.
-- Password reset requests use generic responses to avoid confirming whether an email is registered. Reset tokens are hashed, expire after one hour, are single-use, and reset the account password. Reset increments the session version so existing bearer sessions are rejected.
+- Password reset requests use generic responses to avoid confirming whether an email is registered. Reset tokens are hashed, expire after one hour, are single-use, and reset the account password. Reset increments the session version so existing sessions are rejected. Production sessions use Secure, HttpOnly, SameSite cookies with CSRF proof for mutations; non-production retains sessionStorage bearer compatibility.
 - Email verification and password reset require working SMTP in production. Test these flows in staging using synthetic accounts and a dedicated test email provider before release.
 - Generate a separate `BACKUP_ENCRYPTION_KEY` using `openssl rand -hex 32`; keep it separate from `BANK_TOKEN_ENCRYPTION_KEY`. Do not put it in source control or a frontend variable.
 - `npm run backup` creates an AES-256-GCM encrypted SQLite backup. `npm run restore` restores an encrypted backup to a new, non-existing path and runs SQLite integrity_check before writing it. See [docs/BACKUP-RESTORE.md](docs/BACKUP-RESTORE.md).
