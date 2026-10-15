@@ -10,6 +10,7 @@ import Database from 'better-sqlite3'
 import { createPlaidSync } from './plaid-sync.js'
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import { createRateLimiter } from './rate-limit.js'
+import { getSafeErrorCode } from './safe-logging.js'
 import { migrateDatabase } from './migrations.js'
 import { clearSessionCookieHeaders, createSessionCookieHeaders, getCookie, hasValidCsrfProof, SESSION_COOKIE_NAME } from './session-cookies.js'
 import { isAllowedFrequency, isAllowedSubscriptionStatus, isOptionalBoolean, isValidIsoDate, parseCurrency, parseSignedCurrency } from './validation.js'
@@ -117,7 +118,7 @@ const plaidClient = plaidConfigured
   : null
 const bankTokenEncryptionKey = plaidConfigured ? Buffer.from(process.env.BANK_TOKEN_ENCRYPTION_KEY, 'hex') : null
 const logPlaidFailure = (context, error) => {
-  console.error(context, error?.response?.data?.error_code || error?.code || 'Unknown Plaid error')
+  console.error(context, getSafeErrorCode(error, error?.response?.data?.error_code))
 }
 const emailTransport = process.env.SMTP_HOST
   ? nodemailer.createTransport({
@@ -301,7 +302,11 @@ if (isProduction && allowedOrigins.some((origin) => origin.includes('localhost')
 }
 
 const configuredTrustProxy = process.env.TRUST_PROXY_HOPS
-if (configuredTrustProxy !== undefined) {
+if (configuredTrustProxy === undefined && isProduction) {
+  // The documented production topology is Caddy -> app. Trust its forwarded
+  // client address so per-IP limits distinguish clients behind the proxy.
+  app.set('trust proxy', 1)
+} else if (configuredTrustProxy !== undefined) {
   const trustedHops = Number(configuredTrustProxy)
   if (!Number.isInteger(trustedHops) || trustedHops < 1 || trustedHops > 5) {
     throw new Error('TRUST_PROXY_HOPS must be an integer from 1 to 5.')
@@ -323,7 +328,7 @@ app.use((req, res, next) => {
       'Content-Security-Policy-Report-Only',
       "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; " +
       "script-src 'self' https://accounts.google.com https://cdn.plaid.com; " +
-      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+      "style-src 'self' https://fonts.googleapis.com; style-src-attr 'unsafe-inline'; " +
       "font-src 'self' data: https://fonts.gstatic.com; " +
       "img-src 'self' data: blob: https:; " +
       "connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://*.plaid.com https://api.stripe.com; " +
@@ -541,7 +546,7 @@ const deliverQueuedEmails = async () => {
         const attempts = email.attempts + 1
         if (attempts >= 5) {
           db.prepare('DELETE FROM notification_emails WHERE id = ?').run(email.id)
-          console.error('Notification email permanently failed:', error?.code || error?.message || 'Unknown SMTP error')
+          console.error('Notification email permanently failed:', getSafeErrorCode(error))
         } else {
           const retryAfterMinutes = 2 ** attempts
           db.prepare(`
@@ -549,7 +554,7 @@ const deliverQueuedEmails = async () => {
             SET status = 'queued', attempts = ?, next_attempt_at = datetime('now', ?)
             WHERE id = ?
           `).run(attempts, `+${retryAfterMinutes} minutes`, email.id)
-          console.error('Notification email delivery failed; it will be retried:', error?.code || error?.message || 'Unknown SMTP error')
+          console.error('Notification email delivery failed; it will be retried:', getSafeErrorCode(error))
         }
       }
     }
@@ -933,7 +938,7 @@ const bankSyncTimer = setInterval(() => {
   const connections = db.prepare("SELECT * FROM bank_connections WHERE status = 'connected'").all()
   for (const connection of connections) {
     void syncPlaidConnection(connection).catch((error) => {
-      console.error('Automatic bank transaction sync failed:', error?.response?.data?.error_code || error?.code || error?.message || 'Unknown Plaid error')
+      console.error('Automatic bank transaction sync failed:', getSafeErrorCode(error, error?.response?.data?.error_code))
     })
   }
 }, 15 * 60 * 1000)
@@ -1354,7 +1359,7 @@ app.delete('/api/data/delete', withUser, async (req, res, next) => {
         db.prepare("UPDATE bank_connections SET status = 'removed', encrypted_access_token = '', encryption_iv = '', encryption_tag = '' WHERE item_id = ? AND user_id = ?")
           .run(connection.item_id, req.user.id)
       } catch (error) {
-        console.error('Bank unlink during account deletion failed:', error?.response?.data?.error_code || error?.code || error?.message || 'Unknown Plaid error')
+        console.error('Bank unlink during account deletion failed:', getSafeErrorCode(error, error?.response?.data?.error_code))
         return res.status(502).json({ error: 'A bank connection could not be revoked, so the account was not deleted. Try again or contact support.' })
       }
     }
@@ -1395,7 +1400,7 @@ app.delete('/api/data/delete', withUser, async (req, res, next) => {
     try {
       await emailTransport.sendMail({ from: emailFrom, ...deletionEmail })
     } catch (error) {
-      console.error('Account deletion receipt email failed:', error?.code || 'Unknown SMTP error')
+      console.error('Account deletion receipt email failed:', getSafeErrorCode(error))
     }
   }
   if (isProduction) res.setHeader('Set-Cookie', clearSessionCookieHeaders({ secure: true }))
@@ -1658,7 +1663,7 @@ app.use((error, _req, res, _next) => {
   if (error instanceof SyntaxError && 'body' in error) {
     return res.status(400).json({ error: 'Request body must be valid JSON.' })
   }
-  console.error('Unhandled server error:', error)
+  console.error('Unhandled server error:', getSafeErrorCode(error))
   return res.status(500).json({ error: 'Internal server error.' })
 })
 

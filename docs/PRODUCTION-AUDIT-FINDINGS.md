@@ -104,7 +104,7 @@
 ### 15. Observability and support runbooks must be exercised
 **Evidence:** code logs some provider/SMTP failures, but repository checks do not prove alert routing, request correlation, incident response, or deployed log redaction.
 
-**Fix:** add request IDs and safe error classification; monitor auth abuse, 5xx, SMTP queue growth, stale Plaid syncs, backup age/failure, disk exhaustion, and Stripe webhook failures. Ensure logs exclude tokens, passwords, raw bank payloads, and unnecessary personal/financial data; assign a human response owner.
+**Status: PARTIAL CODE FIX IMPLEMENTED, CI PENDING.** Provider and server error logs now emit a validated error code or generic classification instead of arbitrary error messages, which can contain personal/provider response data. `server/safe-logging.js` has regression tests for redaction. Request IDs, alert routing, stale-sync/backup/disk monitors, and an assigned incident responder still need implementation and operational proof.
 
 ## Items requiring live/staging access
 

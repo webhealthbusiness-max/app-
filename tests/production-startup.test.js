@@ -138,6 +138,13 @@ test('unknown NODE_ENV values fail closed instead of falling back to development
   assert.match(result.stderr, /NODE_ENV must be development, test, or production/)
 })
 
+test('production trusts the documented single reverse-proxy hop for client IP rate limits', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const source = await readFile(serverPath, 'utf8')
+  assert.match(source, /configuredTrustProxy === undefined && isProduction[\s\S]*app\.set\('trust proxy', 1\)/)
+  assert.match(source, /TRUST_PROXY_HOPS must be an integer from 1 to 5/)
+})
+
 test('Plaid sync uses a bounded batch and commits its latest page cursor', async () => {
   const { readFile } = await import('node:fs/promises')
   const source = await readFile(new URL('../server/plaid-sync.js', import.meta.url), 'utf8')
@@ -168,5 +175,6 @@ test('production responses start CSP validation in report-only mode without unsa
   assert.match(source, /Content-Security-Policy-Report-Only/)
   assert.match(source, /script-src 'self' https:\/\/accounts\.google\.com https:\/\/cdn\.plaid\.com/)
   assert.match(source, /frame-ancestors 'none'/)
+  assert.match(source, /style-src-attr 'unsafe-inline'/, 'inline styles should be limited to attributes used by React')
   assert.doesNotMatch(source, /script-src[^\n]*unsafe-eval/)
 })
