@@ -7,8 +7,9 @@ import nodemailer from 'nodemailer'
 import { OAuth2Client } from 'google-auth-library'
 import { Configuration, PlaidApi, PlaidEnvironments, Products } from 'plaid'
 import Database from 'better-sqlite3'
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
-import { mkdirSync } from 'node:fs'
+import { createPlaidSync } from './plaid-sync.js'
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
+import { existsSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -17,6 +18,17 @@ const __dirname = path.dirname(__filename)
 const app = express()
 const port = Number(process.env.PORT || 4000)
 const isProduction = process.env.NODE_ENV === 'production'
+const appEnvironment = process.env.APP_ENV || (isProduction ? 'production' : 'development')
+if (!['development', 'staging', 'production'].includes(appEnvironment)) {
+  throw new Error('APP_ENV must be development, staging, or production.')
+}
+if (isProduction && !['staging', 'production'].includes(appEnvironment)) {
+  throw new Error('APP_ENV must be staging or production when NODE_ENV=production.')
+}
+if (!isProduction && appEnvironment !== 'development') {
+  throw new Error('APP_ENV=staging or production requires NODE_ENV=production.')
+}
+const requireEmailVerification = isProduction || process.env.AUTH_REQUIRE_EMAIL_VERIFICATION === 'true'
 if (isProduction && (!process.env.JWT_SECRET || process.env.JWT_SECRET.length < 32)) {
   throw new Error('A JWT_SECRET of at least 32 characters is required in production.')
 }
@@ -50,8 +62,11 @@ if (!['sandbox', 'development', 'production'].includes(plaidEnvironment)) {
 if (plaidConfigured && !/^[a-fA-F0-9]{64}$/.test(process.env.BANK_TOKEN_ENCRYPTION_KEY)) {
   throw new Error('BANK_TOKEN_ENCRYPTION_KEY must be exactly 64 hexadecimal characters (32 bytes).')
 }
-if (isProduction && plaidConfigured && plaidEnvironment !== 'production') {
+if (isProduction && appEnvironment === 'production' && plaidConfigured && plaidEnvironment !== 'production') {
   throw new Error('Production bank connections must use PLAID_ENV=production.')
+}
+if (isProduction && appEnvironment === 'staging' && plaidConfigured && plaidEnvironment !== 'sandbox') {
+  throw new Error('Staging bank connections must use PLAID_ENV=sandbox.')
 }
 if (process.env.PLAID_REDIRECT_URI) {
   let plaidRedirectUrl
@@ -64,8 +79,11 @@ if (process.env.PLAID_REDIRECT_URI) {
     throw new Error('Production PLAID_REDIRECT_URI must use HTTPS.')
   }
 }
-if (isProduction && !process.env.STRIPE_SECRET_KEY.startsWith('sk_live_')) {
+if (isProduction && appEnvironment === 'production' && !process.env.STRIPE_SECRET_KEY.startsWith('sk_live_')) {
   throw new Error('Production billing must use a live Stripe secret key.')
+}
+if (isProduction && appEnvironment === 'staging' && !process.env.STRIPE_SECRET_KEY.startsWith('sk_test_')) {
+  throw new Error('Staging billing must use a Stripe test secret key.')
 }
 const databasePath = process.env.DATABASE_PATH
   ? path.resolve(process.env.DATABASE_PATH)
@@ -106,6 +124,7 @@ const emailTransport = process.env.SMTP_HOST
     })
   : null
 const emailFrom = process.env.SMTP_FROM || ''
+if (requireEmailVerification && !emailTransport) throw new Error('Email verification requires complete SMTP configuration.')
 const stripePrices = {
   monthly: process.env.STRIPE_PRICE_MONTHLY || '',
   annual: process.env.STRIPE_PRICE_ANNUAL || '',
@@ -315,6 +334,31 @@ if (configuredTrustProxy !== undefined) {
   app.set('trust proxy', trustedHops)
 }
 
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff')
+  res.setHeader('X-Frame-Options', 'DENY')
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
+  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()')
+  if (req.path.startsWith('/api')) res.setHeader('Cache-Control', 'no-store')
+  if (isProduction) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+    // Start CSP in report-only mode so Google Identity, Plaid Link, fonts, and
+    // checkout flows can be validated in staging before enforcing a policy.
+    res.setHeader(
+      'Content-Security-Policy-Report-Only',
+      "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; " +
+      "script-src 'self' https://accounts.google.com https://cdn.plaid.com; " +
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+      "font-src 'self' data: https://fonts.gstatic.com; " +
+      "img-src 'self' data: blob: https:; " +
+      "connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://*.plaid.com https://api.stripe.com; " +
+      "frame-src https://accounts.google.com https://*.plaid.com; " +
+      "form-action 'self' https://checkout.stripe.com"
+    )
+  }
+  next()
+})
+
 app.use(cors({
   origin: (origin, callback) => {
     if (!origin || allowedOrigins.includes(origin)) {
@@ -367,17 +411,8 @@ app.post('/api/billing/webhook', express.raw({ type: 'application/json', limit: 
   }
 })
 app.use(express.json({ limit: '1mb' }))
-app.use((req, res, next) => {
-  res.setHeader('X-Content-Type-Options', 'nosniff')
-  res.setHeader('X-Frame-Options', 'DENY')
-  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
-  res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()')
-  if (req.path.startsWith('/api')) res.setHeader('Cache-Control', 'no-store')
-  if (isProduction) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
-  next()
-})
 
-const createUserToken = (user) => jwt.sign({ id: user.id, email: user.email }, JWT_SECRET, { expiresIn: '7d' })
+const createUserToken = (user) => jwt.sign({ id: user.id, email: user.email, sv: Number(user.session_version || 0) }, JWT_SECRET, { expiresIn: '7d' })
 
 const withUser = (req, res, next) => {
   const authHeader = req.headers.authorization || ''
@@ -399,8 +434,8 @@ const withUser = (req, res, next) => {
   if (!decoded || typeof decoded !== 'object' || !Number.isInteger(decoded.id)) {
     return res.status(401).json({ error: 'Invalid user session.' })
   }
-  const user = db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(decoded.id)
-  if (!user) return res.status(401).json({ error: 'Invalid user session.' })
+  const user = db.prepare('SELECT id, name, email, session_version FROM users WHERE id = ?').get(decoded.id)
+  if (!user || Number(decoded.sv || 0) !== Number(user.session_version || 0)) return res.status(401).json({ error: 'Invalid or revoked user session.' })
   req.user = user
   return next()
 }
@@ -596,6 +631,9 @@ db.exec(`
 `) 
 db.prepare("UPDATE notification_emails SET status = 'queued' WHERE status = 'sending'").run()
 const userColumns = new Set(db.pragma('table_info(users)').map((column) => column.name))
+if (!userColumns.has('session_version')) db.exec('ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0')
+if (!userColumns.has('email_verified')) db.exec('ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 1')
+db.exec(`CREATE TABLE IF NOT EXISTS auth_tokens (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, purpose TEXT NOT NULL CHECK (purpose IN ('verify_email', 'reset_password')), expires_at TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE); CREATE INDEX IF NOT EXISTS auth_tokens_user_purpose_idx ON auth_tokens(user_id, purpose);`)
 if (!userColumns.has('google_sub')) {
   db.exec('ALTER TABLE users ADD COLUMN google_sub TEXT')
   db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_google_sub_unique ON users(google_sub) WHERE google_sub IS NOT NULL')
@@ -668,8 +706,9 @@ const deliverQueuedEmails = async () => {
       LIMIT 10
     `).all()
     for (const email of queued) {
-      db.prepare('UPDATE notification_emails SET status = ? WHERE id = ? AND status = ?')
+      const claim = db.prepare('UPDATE notification_emails SET status = ? WHERE id = ? AND status = ?')
         .run('sending', email.id, 'queued')
+      if (!claim.changes) continue
       try {
         await emailTransport.sendMail({ from: emailFrom, to: email.recipient, subject: email.subject, text: email.message })
         db.prepare('DELETE FROM notification_emails WHERE id = ?').run(email.id)
@@ -700,6 +739,14 @@ const persistStripeSubscription = (userId, customer, subscription) => {
   if (!db.prepare('SELECT 1 FROM users WHERE id = ?').get(userId)) return
   const previousStatus = db.prepare('SELECT status FROM billing_subscriptions WHERE user_id = ?').get(userId)?.status
   const customerId = typeof customer === 'string' ? customer : customer?.id
+  const conflictingBillingRecords = db.prepare(`
+    SELECT user_id FROM billing_subscriptions
+    WHERE (stripe_customer_id = ? AND ? IS NOT NULL)
+       OR (stripe_subscription_id = ? AND ? IS NOT NULL)
+  `).all(customerId || null, customerId || null, subscription.id || null, subscription.id || null)
+  if (conflictingBillingRecords.some((record) => record.user_id !== userId)) {
+    throw new Error('Stripe subscription/customer is already associated with a different Grounded user.')
+  }
   const priceId = subscription.items?.data?.[0]?.price?.id || null
   const currentPeriodEnd = subscription.current_period_end
     ? new Date(subscription.current_period_end * 1000).toISOString()
@@ -750,46 +797,98 @@ const requirePlus = (req, res, next) => {
   return next()
 }
 
+const hashAuthToken = (token) => createHash('sha256').update(token).digest('hex')
+const createAuthToken = (userId, purpose, lifetime) => {
+  const token = randomBytes(32).toString('hex')
+  db.prepare('DELETE FROM auth_tokens WHERE user_id = ? AND purpose = ?').run(userId, purpose)
+  db.prepare("INSERT INTO auth_tokens (token_hash, user_id, purpose, expires_at) VALUES (?, ?, ?, datetime('now', ?))").run(hashAuthToken(token), userId, purpose, lifetime)
+  return token
+}
+const queueAuthEmail = (userId, recipient, subject, message) => {
+  if (!emailTransport) return false
+  db.prepare('INSERT INTO notification_emails (user_id, recipient, subject, message) VALUES (?, ?, ?, ?)').run(userId, recipient, subject, message)
+  void deliverQueuedEmails()
+  return true
+}
+
 app.post('/api/auth/signup', (req, res) => {
   const { name, email, password } = req.body || {}
-  if (!enforceRateLimit(req, 'signup', RATE_LIMITS.signup)) {
-    return res.status(429).json({ error: 'Too many sign-up attempts. Please wait a moment and try again.' })
-  }
-
+  if (!enforceRateLimit(req, 'signup', RATE_LIMITS.signup)) return res.status(429).json({ error: 'Too many sign-up attempts. Please wait a moment and try again.' })
   const safeName = sanitizeText(name)
   const safeEmail = sanitizeText(email).toLowerCase()
   const safePassword = String(password || '')
-
-  if (
-    !safeName
-    || safeName.length > 80
-    || !isValidEmail(safeEmail)
-    || safePassword.length < 12
-    || Buffer.byteLength(safePassword, 'utf8') > 72
-  ) {
-    return res.status(400).json({ error: 'Name (up to 80 characters), valid email, and a password of 12–72 bytes are required.' })
-  }
-
-  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(safeEmail)
-  if (existing) {
-    return res.status(409).json({ error: 'A user already exists with this email.' })
-  }
-
-  const passwordHash = bcrypt.hashSync(safePassword, 12)
+  if (!safeName || safeName.length > 80 || !isValidEmail(safeEmail) || safePassword.length < 12 || Buffer.byteLength(safePassword, 'utf8') > 72) return res.status(400).json({ error: 'Name (up to 80 characters), valid email, and a password of 12–72 bytes are required.' })
+  if (db.prepare('SELECT id FROM users WHERE email = ?').get(safeEmail)) return res.status(409).json({ error: 'A user already exists with this email.' })
   const user = db.transaction(() => {
-    const result = db.prepare('INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)')
-      .run(safeName, safeEmail, passwordHash)
+    const result = db.prepare('INSERT INTO users (name, email, password_hash, email_verified) VALUES (?, ?, ?, ?)').run(safeName, safeEmail, bcrypt.hashSync(safePassword, 12), requireEmailVerification ? 0 : 1)
     createUserSeedData(result.lastInsertRowid)
     return db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(result.lastInsertRowid)
   })()
-  notifyUser(
-    user,
-    'account_created',
-    'Welcome to Grounded',
-    'Your Grounded account was created. You can review account activity in Notifications.',
-    `Hi ${user.name},\n\nYour Grounded account was created successfully. You can review account activity in your in-app Notifications.\n\nIf you did not create this account, please contact support.`,
-  )
+  notifyUser(user, 'account_created', 'Welcome to Grounded', 'Your Grounded account was created. You can review account activity in Notifications.')
+  if (requireEmailVerification) {
+    const token = createAuthToken(user.id, 'verify_email', '+24 hours')
+    const url = new URL('/', appBaseUrl)
+    url.hash = new URLSearchParams({ verifyEmail: token }).toString()
+    queueAuthEmail(user.id, user.email, 'Verify your Grounded email', 'Hi ' + user.name + ',\n\nVerify your email address within 24 hours:\n' + url.toString() + '\n\nIf you did not create this account, ignore this email.')
+    return res.status(201).json({ verificationRequired: true, message: 'Check your email for a verification link. The link expires in 24 hours.' })
+  }
   return res.status(201).json({ token: createUserToken(user), user })
+})
+
+app.post('/api/auth/verify-email', (req, res) => {
+  const token = typeof req.body?.token === 'string' ? req.body.token : ''
+  if (!/^[a-f0-9]{64}$/.test(token) || !enforceRateLimit(req, 'verify-email', 10)) return res.status(400).json({ error: 'Verification link is invalid or expired. Request a new one.' })
+  const record = db.prepare("SELECT user_id FROM auth_tokens WHERE token_hash = ? AND purpose = 'verify_email' AND expires_at > CURRENT_TIMESTAMP").get(hashAuthToken(token))
+  if (!record) return res.status(400).json({ error: 'Verification link is invalid or expired. Request a new one.' })
+  db.transaction(() => {
+    db.prepare('UPDATE users SET email_verified = 1 WHERE id = ?').run(record.user_id)
+    db.prepare('DELETE FROM auth_tokens WHERE user_id = ? AND purpose = ?').run(record.user_id, 'verify_email')
+  })()
+  return res.json({ verified: true, message: 'Email verified. You can now log in.' })
+})
+
+app.post('/api/auth/resend-verification', (req, res) => {
+  if (!enforceRateLimit(req, 'resend-verification', 5)) return res.status(429).json({ error: 'Too many requests. Please wait before trying again.' })
+  const email = sanitizeText(req.body?.email).toLowerCase()
+  if (isValidEmail(email) && emailTransport) {
+    const user = db.prepare('SELECT id, name, email FROM users WHERE email = ? AND email_verified = 0').get(email)
+    if (user) {
+      const token = createAuthToken(user.id, 'verify_email', '+24 hours')
+      const url = new URL('/', appBaseUrl)
+      url.hash = new URLSearchParams({ verifyEmail: token }).toString()
+      queueAuthEmail(user.id, user.email, 'Verify your Grounded email', 'Hi ' + user.name + ',\n\nVerify your email within 24 hours:\n' + url.toString() + '\n\nIf you did not request this, ignore this message.')
+    }
+  }
+  return res.json({ message: 'If the address belongs to an unverified account, a new verification link will be sent.' })
+})
+
+app.post('/api/auth/password-reset/request', (req, res) => {
+  if (!enforceRateLimit(req, 'password-reset-request', 5)) return res.status(429).json({ error: 'Too many requests. Please wait before trying again.' })
+  const email = sanitizeText(req.body?.email).toLowerCase()
+  if (isValidEmail(email) && emailTransport) {
+    const user = db.prepare('SELECT id, name, email FROM users WHERE email = ?').get(email)
+    if (user) {
+      const token = createAuthToken(user.id, 'reset_password', '+1 hour')
+      const url = new URL('/', appBaseUrl)
+      url.hash = new URLSearchParams({ resetPassword: token }).toString()
+      queueAuthEmail(user.id, user.email, 'Reset your Grounded password', 'Hi ' + user.name + ',\n\nReset your password within one hour:\n' + url.toString() + '\n\nIf you did not request a reset, ignore this email. Your password will not change.')
+    }
+  }
+  return res.json({ message: 'If an account exists for that address, password reset instructions will be sent.' })
+})
+
+app.post('/api/auth/password-reset/complete', (req, res) => {
+  const token = typeof req.body?.token === 'string' ? req.body.token : ''
+  const password = typeof req.body?.password === 'string' ? req.body.password : ''
+  if (!/^[a-f0-9]{64}$/.test(token) || password.length < 12 || Buffer.byteLength(password, 'utf8') > 72) return res.status(400).json({ error: 'A valid reset link and a password of 12–72 bytes are required.' })
+  if (!enforceRateLimit(req, 'password-reset-complete', 10)) return res.status(429).json({ error: 'Too many attempts. Please wait before trying again.' })
+  const record = db.prepare("SELECT user_id FROM auth_tokens WHERE token_hash = ? AND purpose = 'reset_password' AND expires_at > CURRENT_TIMESTAMP").get(hashAuthToken(token))
+  if (!record) return res.status(400).json({ error: 'Reset link is invalid or expired. Request another one.' })
+  db.transaction(() => {
+    db.prepare('UPDATE users SET password_hash = ?, session_version = session_version + 1 WHERE id = ?').run(bcrypt.hashSync(password, 12), record.user_id)
+    db.prepare('DELETE FROM auth_tokens WHERE user_id = ?').run(record.user_id)
+  })()
+  return res.json({ message: 'Password reset successfully. Please log in with your new password.' })
 })
 
 app.post('/api/auth/login', (req, res) => {
@@ -815,7 +914,8 @@ app.post('/api/auth/login', (req, res) => {
     return res.status(401).json({ error: 'Invalid email or password.' })
   }
 
-  const safeUser = { id: user.id, name: user.name, email: user.email }
+  if (requireEmailVerification && !user.email_verified) return res.status(403).json({ error: 'Please verify your email before logging in.', code: 'EMAIL_NOT_VERIFIED' })
+  const safeUser = { id: user.id, name: user.name, email: user.email, session_version: user.session_version || 0 }
   notifyUser(
     safeUser,
     'sign_in',
@@ -853,25 +953,25 @@ app.post('/api/auth/google', async (req, res, next) => {
       return res.status(401).json({ error: 'Google returned an invalid email address.' })
     }
 
-    let user = db.prepare('SELECT id, name, email, google_sub AS googleSub FROM users WHERE google_sub = ?').get(claims.sub)
+    let user = db.prepare('SELECT id, name, email, google_sub AS googleSub, session_version FROM users WHERE google_sub = ?').get(claims.sub)
     let created = false
     if (!user) {
-      user = db.prepare('SELECT id, name, email, google_sub AS googleSub FROM users WHERE email = ?').get(safeEmail)
+      user = db.prepare('SELECT id, name, email, google_sub AS googleSub, session_version FROM users WHERE email = ?').get(safeEmail)
       if (user) {
-        db.prepare('UPDATE users SET google_sub = ? WHERE id = ?').run(claims.sub, user.id)
+        db.prepare('UPDATE users SET google_sub = ?, email_verified = 1 WHERE id = ?').run(claims.sub, user.id)
       } else {
         const safeName = sanitizeText(claims.name, safeEmail.split('@')[0]).slice(0, 80)
         user = db.transaction(() => {
           const result = db.prepare('INSERT INTO users (name, email, password_hash, google_sub) VALUES (?, ?, ?, ?)')
             .run(safeName, safeEmail, bcrypt.hashSync(randomBytes(32).toString('hex'), 12), claims.sub)
           createUserSeedData(result.lastInsertRowid)
-          return db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(result.lastInsertRowid)
+          return db.prepare('SELECT id, name, email, session_version FROM users WHERE id = ?').get(result.lastInsertRowid)
         })()
         created = true
       }
     }
 
-    const safeUser = { id: user.id, name: user.name, email: user.email }
+    const safeUser = { id: user.id, name: user.name, email: user.email, session_version: user.session_version || 0 }
     notifyUser(
       safeUser,
       created ? 'account_created' : 'sign_in',
@@ -980,142 +1080,7 @@ const getDashboardData = (userId) => {
   }
 }
 
-const activeBankSyncs = new Map()
-const syncPlaidConnection = (connection) => {
-  if (activeBankSyncs.has(connection.item_id)) return activeBankSyncs.get(connection.item_id)
-  const sync = (async () => {
-    if (!plaidClient) throw new Error('Bank connections are not configured.')
-    const accessToken = decryptBankAccessToken(connection)
-    let cursor = connection.cursor
-    let pageCount = 0
-    let hasMore = false
-    const changes = []
-    do {
-      const response = await plaidClient.transactionsSync({
-        access_token: accessToken,
-        ...(cursor ? { cursor } : {}),
-        count: 500,
-      })
-      const page = response.data
-      changes.push(page)
-      cursor = page.next_cursor
-      hasMore = page.has_more
-      pageCount += 1
-    } while (hasMore && pageCount < 10)
-
-    const accountResponse = await plaidClient.accountsGet({ access_token: accessToken })
-    const addOrUpdateTransaction = db.prepare(`
-      INSERT INTO transactions (
-        user_id, description, amount, category, type, created_at,
-        source, provider_transaction_id, account_id, plaid_item_id
-      ) VALUES (?, ?, ?, ?, ?, ?, 'bank', ?, ?, ?)
-      ON CONFLICT(provider_transaction_id) DO UPDATE SET
-        description = excluded.description,
-        amount = excluded.amount,
-        category = excluded.category,
-        type = excluded.type,
-        created_at = excluded.created_at,
-        account_id = excluded.account_id,
-        plaid_item_id = excluded.plaid_item_id
-      WHERE transactions.user_id = excluded.user_id
-    `)
-    const findAccountId = db.prepare('SELECT id FROM accounts WHERE plaid_account_id = ? AND user_id = ?')
-    const deleteTransaction = db.prepare("DELETE FROM transactions WHERE user_id = ? AND source = 'bank' AND provider_transaction_id = ?")
-    const removePendingTransaction = db.prepare("DELETE FROM transactions WHERE user_id = ? AND source = 'bank' AND provider_transaction_id = ?")
-    const upsertAccount = db.prepare(`
-      INSERT INTO accounts (user_id, name, type, balance, plaid_account_id, plaid_item_id, mask)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(plaid_account_id) WHERE plaid_account_id IS NOT NULL DO UPDATE SET
-        name = excluded.name,
-        type = excluded.type,
-        balance = COALESCE(excluded.balance, accounts.balance),
-        plaid_item_id = excluded.plaid_item_id,
-          mask = excluded.mask,
-          updated_at = CURRENT_TIMESTAMP
-      WHERE accounts.user_id = excluded.user_id
-    `)
-    let addedCount = 0
-    let modifiedCount = 0
-    db.transaction(() => {
-      for (const account of accountResponse.data.accounts) {
-        upsertAccount.run(
-          connection.user_id,
-          sanitizeText(account.name, 'Bank account').slice(0, 100),
-          `${account.type}${account.subtype ? ` · ${account.subtype}` : ''}`.slice(0, 80),
-          account.balances.current ?? 0,
-          account.account_id,
-          connection.item_id,
-          account.mask || null,
-        )
-      }
-      for (const page of changes) {
-        for (const transaction of page.added) {
-          if (transaction.pending_transaction_id) {
-            removePendingTransaction.run(connection.user_id, transaction.pending_transaction_id)
-          }
-          const localAccount = findAccountId.get(transaction.account_id, connection.user_id)
-          const category = transaction.personal_finance_category?.primary
-            ?.replaceAll('_', ' ')
-            ?.toLowerCase()
-            ?.replace(/\b\w/g, (character) => character.toUpperCase())
-            || transaction.category?.[0]
-            || 'Other'
-          const transactionType = transaction.personal_finance_category?.primary?.startsWith('TRANSFER_')
-            ? 'Transfer'
-            : transaction.amount > 0 ? 'Expense' : 'Income'
-          const description = sanitizeText(transaction.merchant_name || transaction.name, 'Bank transaction').slice(0, 160)
-          addOrUpdateTransaction.run(
-            connection.user_id,
-            description,
-            Math.abs(transaction.amount),
-            category.slice(0, 80),
-            transactionType,
-            transaction.date,
-            transaction.transaction_id,
-            localAccount?.id || null,
-            connection.item_id,
-          )
-          addedCount += 1
-        }
-        for (const transaction of page.modified) {
-          const localAccount = findAccountId.get(transaction.account_id, connection.user_id)
-          const category = transaction.personal_finance_category?.primary
-            ?.replaceAll('_', ' ')
-            ?.toLowerCase()
-            ?.replace(/\b\w/g, (character) => character.toUpperCase())
-            || transaction.category?.[0]
-            || 'Other'
-          const transactionType = transaction.personal_finance_category?.primary?.startsWith('TRANSFER_')
-            ? 'Transfer'
-            : transaction.amount > 0 ? 'Expense' : 'Income'
-          addOrUpdateTransaction.run(
-            connection.user_id,
-            sanitizeText(transaction.merchant_name || transaction.name, 'Bank transaction').slice(0, 160),
-            Math.abs(transaction.amount),
-            category.slice(0, 80),
-            transactionType,
-            transaction.date,
-            transaction.transaction_id,
-            localAccount?.id || null,
-            connection.item_id,
-          )
-          modifiedCount += 1
-        }
-        for (const transaction of page.removed) {
-          if (transaction.transaction_id) deleteTransaction.run(connection.user_id, transaction.transaction_id)
-        }
-      }
-      db.prepare(`
-        UPDATE bank_connections
-        SET cursor = ?, status = 'connected', last_synced_at = CURRENT_TIMESTAMP
-        WHERE item_id = ? AND user_id = ?
-      `).run(hasMore ? connection.cursor : cursor, connection.item_id, connection.user_id)
-    })()
-    return { addedCount, modifiedCount, complete: !hasMore }
-  })().finally(() => activeBankSyncs.delete(connection.item_id))
-  activeBankSyncs.set(connection.item_id, sync)
-  return sync
-}
+const syncPlaidConnection = createPlaidSync({ db, plaidClient, decryptBankAccessToken, sanitizeText })
 
 const bankSyncTimer = setInterval(() => {
   if (!plaidClient) return
@@ -1548,17 +1513,11 @@ app.delete('/api/data/delete', withUser, async (req, res, next) => {
     return res.status(503).json({ error: 'Bank connections could not be revoked, so the account was not deleted. Restore Plaid configuration or contact support.' })
   }
 
-  const deletionNotification = {
-    ...req.user,
-    email: req.user.email,
+  const deletionEmail = {
+    to: req.user.email,
+    subject: 'Grounded account deletion completed',
+    text: `Grounded permanently deleted your account and locally stored data at ${new Date().toUTCString()}. If you did not request this, contact support.`,
   }
-  notifyUser(
-    deletionNotification,
-    'account_deleted',
-    'Account deletion requested',
-    'Your Grounded account and stored data are being permanently deleted.',
-    `Grounded received a request to permanently delete your account at ${new Date().toUTCString()}. If you did not request this, contact support.`,
-  )
 
   const tables = [
     'tasks',
@@ -1569,6 +1528,8 @@ app.delete('/api/data/delete', withUser, async (req, res, next) => {
     'subscriptions',
     'accounts',
     'bank_connections',
+    'notification_emails',
+    'auth_tokens',
     'financial_profiles',
   ]
 
@@ -1578,6 +1539,16 @@ app.delete('/api/data/delete', withUser, async (req, res, next) => {
     }
     db.prepare('DELETE FROM users WHERE id = ?').run(req.user.id)
   })()
+
+  // Queue rows were removed with the account, so send the receipt directly only
+  // after deletion succeeds. Email failure must not reverse a completed deletion.
+  if (emailTransport) {
+    try {
+      await emailTransport.sendMail({ from: emailFrom, ...deletionEmail })
+    } catch (error) {
+      console.error('Account deletion receipt email failed:', error?.code || 'Unknown SMTP error')
+    }
+  }
   return res.json({ success: true })
 })
 
@@ -1648,8 +1619,8 @@ app.post('/api/tasks', withUser, (req, res) => {
   const safeDue = sanitizeText(due)
   const safePriority = ['High', 'Medium', 'Low'].includes(String(priority || '')) ? String(priority) : 'Medium'
 
-  if (!safeTitle || !safeCategory || !safeDue || !safePriority) {
-    return res.status(400).json({ error: 'Task details are required.' })
+  if (!safeTitle || safeTitle.length > 120 || !safeCategory || safeCategory.length > 80 || !safeDue || safeDue.length > 80 || !safePriority) {
+    return res.status(400).json({ error: 'Task details are required and must fit the allowed field lengths.' })
   }
 
   const result = db.prepare('INSERT INTO tasks (user_id, title, category, due_label, priority, completed) VALUES (?, ?, ?, ?, ?, 0)').run(req.user.id, safeTitle, safeCategory, safeDue, safePriority)
@@ -1662,7 +1633,10 @@ app.patch('/api/tasks/:id/toggle', withUser, (req, res) => {
   if (!task) {
     return res.status(404).json({ error: 'Task not found.' })
   }
-  db.prepare('UPDATE tasks SET completed = ? WHERE id = ?').run(task.completed ? 0 : 1, task.id)
+  const result = db.prepare('UPDATE tasks SET completed = ? WHERE id = ? AND user_id = ?').run(task.completed ? 0 : 1, task.id, req.user.id)
+  if (!result.changes) {
+    return res.status(404).json({ error: 'Task not found.' })
+  }
   return res.json({ success: true })
 })
 
@@ -1797,6 +1771,27 @@ app.get('/api/health', (_req, res) => {
   const dbStatus = db.prepare('SELECT 1').get() ? 'healthy' : 'unhealthy'
   res.json({ ok: dbStatus === 'healthy', service: 'grounded-api', uptimeMs: Date.now() - appStartTime, db: dbStatus, timestamp: new Date().toISOString() })
 })
+
+const frontendDistPath = path.resolve(__dirname, '../dist')
+if (existsSync(path.join(frontendDistPath, 'index.html'))) {
+  app.use(express.static(frontendDistPath, {
+    index: false,
+    setHeaders(res, filePath) {
+      if (filePath.includes(path.sep + 'assets' + path.sep)) {
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable')
+      } else {
+        res.setHeader('Cache-Control', 'no-cache')
+      }
+    },
+  }))
+  app.use((req, res, next) => {
+    if (req.method !== 'GET' || req.path.startsWith('/api/') || req.path === '/health') return next()
+    res.setHeader('Cache-Control', 'no-cache')
+    return res.sendFile(path.join(frontendDistPath, 'index.html'), (error) => {
+      if (error) next(error)
+    })
+  })
+}
 
 app.use((error, _req, res, _next) => {
   if (error?.message === 'Origin not allowed by CORS policy.') {

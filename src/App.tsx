@@ -4,7 +4,7 @@ type Tab = 'Home' | 'Money' | 'Forecast' | 'Goals' | 'Tasks' | 'Insights' | 'Pla
 type TrackingMode = 'Manual' | 'Automatic' | 'Hybrid'
 type TaskPriority = 'High' | 'Medium' | 'Low'
 type TransactionType = 'Expense' | 'Income' | 'Transfer'
-type AuthMode = 'login' | 'signup'
+type AuthMode = 'login' | 'signup' | 'forgot' | 'reset'
 
 type Account = {
   id?: number
@@ -236,7 +236,9 @@ function App() {
   const [authMode, setAuthMode] = useState<AuthMode>('signup')
   const [authForm, setAuthForm] = useState({ name: '', email: '', password: '' })
   const [authError, setAuthError] = useState('')
+  const [authMessage, setAuthMessage] = useState('')
   const [authBusy, setAuthBusy] = useState(false)
+  const [authTokenFromLink, setAuthTokenFromLink] = useState('')
   const [isAuthenticated, setIsAuthenticated] = useState(Boolean(getStoredToken()))
   const [appReady, setAppReady] = useState(() => !Boolean(getStoredToken()))
   const [dashboard, setDashboard] = useState<DashboardData | null>(null)
@@ -535,36 +537,67 @@ function App() {
     })
   }
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.hash.replace(/^#/, ''))
+    const verificationToken = params.get('verifyEmail')
+    const resetToken = params.get('resetPassword')
+    if (verificationToken) {
+      setAuthBusy(true)
+      void fetchJson<{ message: string }>('/api/auth/verify-email', { method: 'POST', body: JSON.stringify({ token: verificationToken }) })
+        .then((result: { message: string }) => { setAuthMessage(result.message); setAuthMode('login') })
+        .catch((error) => setAuthError(error instanceof Error ? error.message : 'Could not verify email.'))
+        .finally(() => { setAuthBusy(false); window.history.replaceState({}, document.title, window.location.pathname + window.location.search) })
+    } else if (resetToken) {
+      setAuthTokenFromLink(resetToken)
+      setAuthMode('reset')
+      window.history.replaceState({}, document.title, window.location.pathname)
+    }
+  }, [])
+
   const handleAuthSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
     setAuthError('')
+    setAuthMessage('')
     setAuthBusy(true)
-
     try {
-      const payload = authMode === 'login'
-        ? await fetchJson<{ token: string; user: { name: string; email: string } }>('/api/auth/login', {
-            method: 'POST',
-            body: JSON.stringify({
-              email: authForm.email,
-              password: authForm.password,
-            }),
-          })
-        : await fetchJson<{ token: string; user: { name: string; email: string } }>('/api/auth/signup', {
-            method: 'POST',
-            body: JSON.stringify({
-              name: authForm.name,
-              email: authForm.email,
-              password: authForm.password,
-            }),
-          })
-
+      if (authMode === 'forgot') {
+        const result = await fetchJson<{ message: string }>('/api/auth/password-reset/request', { method: 'POST', body: JSON.stringify({ email: authForm.email }) })
+        setAuthMessage(result.message)
+        return
+      }
+      if (authMode === 'reset') {
+        const result = await fetchJson<{ message: string }>('/api/auth/password-reset/complete', { method: 'POST', body: JSON.stringify({ token: authTokenFromLink, password: authForm.password }) })
+        setAuthMessage(result.message)
+        setAuthMode('login')
+        setAuthTokenFromLink('')
+        setAuthForm((prev) => ({ ...prev, password: '' }))
+        return
+      }
+      const payload: { token?: string; message?: string; user?: { name: string; email: string } } = authMode === 'login'
+        ? await fetchJson<{ token: string; user: { name: string; email: string } }>('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: authForm.email, password: authForm.password }) })
+        : await fetchJson<{ token?: string; message?: string; user?: { name: string; email: string } }>('/api/auth/signup', { method: 'POST', body: JSON.stringify({ name: authForm.name, email: authForm.email, password: authForm.password }) })
+      if (!payload.token || !payload.user) { setAuthMessage(payload.message || 'Check your email for next steps.'); return }
       localStorage.setItem('grounded-token', payload.token)
-      setForm((prev) => ({ ...prev, name: payload.user.name }))
+      setForm((prev) => ({ ...prev, name: payload.user!.name }))
       setIsAuthenticated(true)
       setOnboardingStep(0)
       setShowOnboarding(authMode === 'signup')
     } catch (error) {
       setAuthError(error instanceof Error ? error.message : 'Authentication failed')
+    } finally {
+      setAuthBusy(false)
+    }
+  }
+
+  const handleResendVerification = async () => {
+    setAuthError('')
+    setAuthMessage('')
+    setAuthBusy(true)
+    try {
+      const result = await fetchJson<{ message: string }>('/api/auth/resend-verification', { method: 'POST', body: JSON.stringify({ email: authForm.email }) })
+      setAuthMessage(result.message)
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : 'Could not request another verification email.')
     } finally {
       setAuthBusy(false)
     }
@@ -1197,10 +1230,12 @@ function App() {
           </div>
 
           <form onSubmit={handleAuthSubmit} className="auth-form">
-            <div className="auth-toggle">
-              <button type="button" className={authMode === 'signup' ? 'toggle-button active' : 'toggle-button'} onClick={() => setAuthMode('signup')}>Sign up</button>
-              <button type="button" className={authMode === 'login' ? 'toggle-button active' : 'toggle-button'} onClick={() => setAuthMode('login')}>Log in</button>
-            </div>
+            {authMode !== 'forgot' && authMode !== 'reset' && (
+              <div className="auth-toggle">
+                <button type="button" className={authMode === 'signup' ? 'toggle-button active' : 'toggle-button'} onClick={() => { setAuthMode('signup'); setAuthError(''); setAuthMessage('') }}>Sign up</button>
+                <button type="button" className={authMode === 'login' ? 'toggle-button active' : 'toggle-button'} onClick={() => { setAuthMode('login'); setAuthError(''); setAuthMessage('') }}>Log in</button>
+              </div>
+            )}
 
             {authMode === 'signup' && (
               <label className="field">
@@ -1209,22 +1244,31 @@ function App() {
               </label>
             )}
 
-            <label className="field">
-              <span>Email</span>
-              <input autoComplete="email" maxLength={254} required type="email" value={authForm.email} onChange={(event) => setAuthForm((prev) => ({ ...prev, email: event.target.value }))} />
-            </label>
+            {authMode !== 'reset' && (
+              <label className="field">
+                <span>Email</span>
+                <input autoComplete="email" maxLength={254} required type="email" value={authForm.email} onChange={(event) => setAuthForm((prev) => ({ ...prev, email: event.target.value }))} />
+              </label>
+            )}
 
-            <label className="field">
-              <span>Password</span>
-              <input autoComplete={authMode === 'signup' ? 'new-password' : 'current-password'} maxLength={72} minLength={authMode === 'signup' ? 12 : 1} required type="password" value={authForm.password} onChange={(event) => setAuthForm((prev) => ({ ...prev, password: event.target.value }))} />
-            </label>
+            {authMode !== 'forgot' && (
+              <label className="field">
+                <span>Password{authMode === 'reset' ? ' (new password)' : ''}</span>
+                <input autoComplete={authMode === 'signup' || authMode === 'reset' ? 'new-password' : 'current-password'} maxLength={72} minLength={authMode === 'signup' || authMode === 'reset' ? 12 : 1} required type="password" value={authForm.password} onChange={(event) => setAuthForm((prev) => ({ ...prev, password: event.target.value }))} />
+              </label>
+            )}
 
             {authError && <div className="auth-error">{authError}</div>}
+            {authMessage && <div className="auth-success" role="status">{authMessage}</div>}
 
             <button type="submit" className="primary-button wide" disabled={authBusy}>
-              {authBusy ? 'Please wait…' : authMode === 'signup' ? 'Create account' : 'Log in'}
+              {authBusy ? 'Please wait…' : authMode === 'signup' ? 'Create account' : authMode === 'login' ? 'Log in' : authMode === 'forgot' ? 'Send reset link' : 'Reset password'}
             </button>
-            {googleClientId && (
+            {authMode === 'login' && <button type="button" className="text-button" onClick={() => { setAuthMode('forgot'); setAuthError(''); setAuthMessage('') }}>Forgot password?</button>}
+            {authMode === 'login' && <button type="button" className="text-button" disabled={authBusy || !authForm.email} onClick={() => void handleResendVerification()}>Resend verification email</button>}
+            {(authMode === 'forgot' || authMode === 'reset') && <button type="button" className="text-button" onClick={() => { setAuthMode('login'); setAuthError(''); setAuthMessage('') }}>Back to log in</button>}
+            {authMode === 'signup' && <p className="auth-hint">In production, we'll email you a verification link before your account can be used.</p>}
+            {googleClientId && authMode !== 'forgot' && authMode !== 'reset' && (
               <>
                 <div className="auth-divider"><span>or</span></div>
                 <div ref={googleButtonRef} className="google-signin-button" aria-label="Sign in with Google" />

@@ -5,7 +5,7 @@ This guide lists the work required to take Grounded from its current development
 ## Current implementation and important limitations
 
 - The frontend is built with `npm run build`; the API is the Express server started with `npm start`.
-- The API does **not** serve the built frontend. Deploy the Vite `dist/` output to a static web host and the Node API to a Node-capable service, then configure the web host/reverse proxy to forward `/api/*` to the API. Keep the browser's `/api` requests on the same public origin.
+- When the Vite `dist/` folder exists, the Node API can serve the built frontend and SPA routes from the same origin; this supports a single-service deployment. If you instead host the frontend separately, configure same-origin `/api/*` routing through a reverse proxy and ensure authenticated API responses are never cached.
 - The API currently uses SQLite and is designed for one API instance. A persistent volume is necessary even for a single-instance deployment. Before scaling or requiring high availability, migrate to a managed database and replace SQLite-specific code.
 - Signup/login rate limits are kept in process memory; they do not coordinate across API instances or survive restarts.
 - Plaid syncing currently runs in the API process approximately every 15 minutes, in addition to connection-time and user-requested sync. It is not a durable job queue; process restarts or downtime pause automatic syncing.
@@ -84,7 +84,7 @@ The current production startup guard requires complete SMTP settings.
 - [ ] Rebuild the frontend after setting `VITE_GOOGLE_CLIENT_ID`, then deploy both frontend and API configuration.
 - [ ] Test first-time Google signup, existing verified-email account linking, sign-in, rejected/expired credentials, and email notifications.
 - [ ] Test password signup/login, duplicate signups, invalid credentials, rate limiting, logout, and expired sessions over HTTPS.
-- [ ] Before a public launch, implement and test email verification and password reset, and review session/token storage and revocation. Consider MFA based on the threat model. These workflows are not currently implemented.
+- [ ] Email verification and password reset are implemented in code with hashed, expiring, single-use tokens and session revocation on reset. Before a public launch, complete real SMTP-backed staging tests, verify abuse limits and delivery/retry behavior, review session/token storage and revocation, and assess MFA based on the threat model. Implementation and unit tests alone do not prove the production email flow works.
 - [ ] Add clear support instructions for a user who did not initiate a security alert.
 
 ## 6. Configure Stripe and confirm billing
@@ -157,6 +157,7 @@ Required by the current production startup checks:
 
 ```text
 NODE_ENV=production
+APP_ENV=production
 PORT=<port supplied by host>
 JWT_SECRET=<random secret, at least 32 characters>
 ALLOWED_ORIGINS=https://your-domain.example
@@ -192,3 +193,14 @@ PLAID_REDIRECT_URI=<optional registered HTTPS OAuth redirect>
 ```
 
 After setting production environment variables, restart/redeploy the API. Rebuild and redeploy the frontend whenever `VITE_GOOGLE_CLIENT_ID` changes.
+
+
+## Authentication recovery and encrypted backups
+
+- Production signup now requires email verification; the API creates a single-use token whose hash is stored in SQLite, and login is blocked until verification. Verification links expire after 24 hours.
+- Password reset requests use generic responses to avoid confirming whether an email is registered. Reset tokens are hashed, expire after one hour, are single-use, and reset the account password. Reset increments the session version so existing bearer sessions are rejected.
+- Email verification and password reset require working SMTP in production. Test these flows in staging using synthetic accounts and a dedicated test email provider before release.
+- Generate a separate `BACKUP_ENCRYPTION_KEY` using `openssl rand -hex 32`; keep it separate from `BANK_TOKEN_ENCRYPTION_KEY`. Do not put it in source control or a frontend variable.
+- `npm run backup` creates an AES-256-GCM encrypted SQLite backup. `npm run restore` restores an encrypted backup to a new, non-existing path and runs SQLite integrity_check before writing it. See [docs/BACKUP-RESTORE.md](docs/BACKUP-RESTORE.md).
+- These scripts and recovery flows must pass CI and a real staging restore/email drill before they can be considered production-ready. Off-host backup retention, scheduling, alerting, and a tested production restore procedure are still required.
+- See [docs/SECURITY-ACCESS-CONTROLS.md](docs/SECURITY-ACCESS-CONTROLS.md) for the route-by-route financial-data authorization checklist and [docs/DEPLOYMENT-RUNBOOK.md](docs/DEPLOYMENT-RUNBOOK.md) for deployment gates.
