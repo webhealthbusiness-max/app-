@@ -1,6 +1,6 @@
 # Grounded production audit findings
 
-**Scope:** source review of `origin/ci-smoke-tests` plus remediation in draft PR #10, branch `codex/comprehensive-remediation`. This is not a penetration test or legal/compliance opinion. The public CORS failure is confirmed by read-only HTTP probes. GitHub Actions run #234 passed for head `77ad8e104253b750d6223cc4a754e822725a2d22`: `npm ci`, `npm audit --audit-level=moderate`, all `npm test` tests, deployment-checker syntax, frontend build, and Docker build. Local native database tests could not run in this environment because the available `better-sqlite3` binding crashed under Node 22; CI provides the verified test result. Staging/provider, production-configuration, backup/restore, and legal/privacy checks remain outside this CI evidence.
+**Scope:** source review of `origin/ci-smoke-tests` plus remediation in draft PR #10, branch `codex/comprehensive-remediation`. This is not a penetration test or legal/compliance opinion. GitHub Actions run [#242](https://github.com/webhealthbusiness-max/app-/actions/runs/38681796307) passed on head `b605a20f587b1061227a612c8bac27c5dca61b45`: `npm ci`, `npm audit --audit-level=moderate`, all `npm test` tests, deployment-checker syntax, frontend build, and Docker build. The audit environment has no local Node/npm/browser executable, so tests/builds were verified in CI rather than locally. Staging/provider, production-configuration, backup/restore, and legal/privacy checks remain outside this CI evidence.
 
 ## Release recommendation
 
@@ -9,9 +9,9 @@
 ## P0 — confirmed live-site release blocker
 
 ### Browser asset requests are rejected by the application's Origin check
-**Evidence (read-only public requests, 2026-10-15):** the production homepage returns HTTP 200 through Caddy and references `/assets/index-uyI3Hzpm.js` and `/assets/index-CnYiRr1h.css`. Each asset returns HTTP 200 with its expected JavaScript/CSS MIME type when requested without an `Origin` header, but HTTP 403 `application/json` when requested with `Origin: https://www.mygroundedfinance.online` or `Origin: https://mygroundedfinance.online`. `/health` and `/api/health` show the same origin-dependent behavior. Responses identify Caddy as the proxy and Express as the application (`X-Powered-By`), matching `server/index.js` CORS middleware at lines 323–369 and its 403 handler at lines 1797–1798.
+**Evidence (read-only public requests, 2026-10-15):** the production homepage returns HTTP 200 through Caddy and references `/assets/index-uyI3Hzpm.js` and `/assets/index-CnYiRr1h.css`. Prior originless VPS probes returned HTTP 200 with JavaScript/CSS MIME types. A fresh request in this audit returned HTTP 403 `application/json` for both assets with `Origin: https://www.mygroundedfinance.online`; `/api/health` with that Origin also returned 403. The current responses reproduce the browser failure. In the branch source, `server/index.js:342-351` rejects origins absent from `allowedOrigins`, and `server/index.js:1656-1659` maps that error to HTTP 403. The Docker API remains inaccessible from this environment, so the live process source/configuration could not be inspected directly.
 
-**Confirmed cause:** the running application's CORS middleware rejects both public site origins. The exact configured allowlist was not read or printed. The app's static asset URLs reach Express CORS middleware, which rejects the browser's origin before static-file serving. Originless VPS requests therefore conceal the problem.
+**Confirmed at the public HTTP boundary:** a request carrying the public site Origin is rejected before it can receive the asset, while the homepage is served. The repository's CORS middleware is an exact code path capable of returning this response. **Most likely cause:** the live process allowlist does not contain the canonical browser origin. The exact running image, configuration, and middleware version have not been inspected, so attributing the live response to that precise deployed code remains a high-confidence hypothesis rather than direct host-level proof. Asset hash/build mismatch is not indicated by this response pattern but has not been ruled out by comparing the running image.
 
 **Safe repair:** configure `ALLOWED_ORIGINS` with the exact canonical public origins actually used by the site, preserving any other intentionally supported origins; do not use `*`. This is a live production configuration change and has not been made. After the owner approves the configuration update and restart, rerun the origin-bearing public asset/API checks and load the site in a browser. The deployment checker now sends the page origin with asset and health requests so CI/operations checks detect this failure.
 
@@ -22,7 +22,7 @@
 ### 1. Production environment consistency
 **Evidence:** safeguards depend on `NODE_ENV=production`; `APP_ENV=staging|production` is rejected unless `NODE_ENV=production`.
 
-**Status: FIX IMPLEMENTED IN DRAFT PR #10; CI PASSED.** Startup also rejects unknown `NODE_ENV` values so a typo such as `Production` cannot silently select development defaults. Regression tests cover mismatched and invalid values and passed in CI run #234.
+**Status: FIX IMPLEMENTED IN DRAFT PR #10; CI PASSED.** Startup also rejects unknown `NODE_ENV` values so a typo such as `Production` cannot silently select development defaults. Regression tests cover mismatched and invalid values and passed in CI run #242.
 
 ### 2. Plaid sync can get stuck after more than 5,000 changes
 **Evidence:** syncPlaidConnection in server/index.js stops after 10 pages of 500 transactions. When hasMore remains true, it stores the original connection.cursor instead of the last processed cursor.
@@ -34,14 +34,14 @@
 ### 3. Browser session token exposure
 **Evidence:** the previous frontend stored the production bearer JWT in localStorage, where script injection could read it.
 
-**Status: FIX IMPLEMENTED IN DRAFT PR #10; CI PASSED.** Production now issues Secure, HttpOnly, SameSite session cookies, signed CSRF tokens, revokes sessions on logout, and no longer returns JWTs in JSON. The frontend uses cookies in production and sessionStorage only in non-production. Unit and synthetic production integration tests passed in CI run #234. Browser E2E and staging compatibility with Google and Plaid remain unverified. CSP remains report-only and does not block script execution.
+**Status: FIX IMPLEMENTED IN DRAFT PR #10; CI PASSED.** Production now issues Secure, HttpOnly, SameSite session cookies, signed CSRF tokens, revokes sessions on logout, and no longer returns JWTs in JSON. The frontend uses cookies in production and sessionStorage only in non-production. Unit and synthetic production integration tests passed in CI run #242. Browser E2E and staging compatibility with Google and Plaid remain unverified. CSP remains report-only and does not block script execution.
 
 ### 4. In-memory rate limits are not a production abuse-control system
 **Evidence:** the previous implementation used a process-local Map keyed by IP, which reset on restart and lacked per-account limits.
 
 **Failure mode:** restarts/replicas bypass limits; distributed attackers can spray password-reset/verification emails; users behind one shared IP can block each other; stale map entries are cleaned only when the map reaches its bucket cap.
 
-**Status: SINGLE-HOST FIX IMPLEMENTED IN DRAFT PR #10; CI PASSED.** Rate-limit buckets persist in SQLite across app restarts, are HMAC-keyed rather than storing raw emails/IPs, bound key cardinality, and apply account/user keys alongside IP keys on signup, login, recovery, banking, and billing routes. Persistence, expiry, and key-bound tests passed in CI run #234. **Still required:** verify proxy IP trust and 429 behavior in staging. SQLite rate limits are only appropriate for a single-host/single-instance model; multi-host deployments require shared storage.
+**Status: SINGLE-HOST FIX IMPLEMENTED IN DRAFT PR #10; CI PASSED.** Rate-limit buckets persist in SQLite across app restarts, are HMAC-keyed rather than storing raw emails/IPs, bound key cardinality, and apply account/user keys alongside IP keys on signup, login, recovery, banking, and billing routes. Persistence, expiry, and key-bound tests passed in CI run #242. Production now defaults to one trusted proxy hop, matching the documented Caddy-to-app topology; verify the actual chain and 429 behavior in staging. SQLite rate limits are only appropriate for a single-host/single-instance model; multi-host deployments require shared storage.
 
 ### 5. Production privacy/legal documents are not ready
 **Evidence:** server/index.js labels the privacy page a pre-launch disclosure and says production retention, backup-erasure policy, and independent privacy review are missing. Terms are explicitly drafts. README-PRODUCTION.md lists counsel review and retention/deletion review as outstanding.
@@ -55,7 +55,7 @@
 ### 6. Browser security policy and hardening validation are incomplete
 **Evidence:** server sets nosniff, frame denial, referrer policy, permissions policy, and HSTS in production. A CSP `Report-Only` baseline was added, but enforcement and browser end-to-end tests are still absent.
 
-**Status: PARTIAL FIX COMMITTED.** Production emits an initial `Content-Security-Policy-Report-Only` baseline without `unsafe-eval`. This policy does not block violations; without a configured `report-uri`/`report-to` collector, violations are visible primarily in browser developer tools rather than centrally collected. The latest code also allows manually triggering CI from GitHub Actions, and the deployment checker now fails if the page serves `/src/main.tsx` rather than a built bundle. **Still required:** confirm CI for the latest commit, validate in staging with Google/Plaid flows, add deliberate violation collection if desired, then refine and enforce a tested CSP; consider COOP/CORP where compatible and add browser E2E tests.
+**Status: PARTIAL FIX COMMITTED; CI PASSED.** Production emits an initial `Content-Security-Policy-Report-Only` baseline without `unsafe-eval`. This policy does not block violations; without a configured `report-uri`/`report-to` collector, violations are visible primarily in browser developer tools rather than centrally collected. `style-src` now avoids broad inline style permission while `style-src-attr` allows React's inline style attributes. The deployment checker fails if the page serves `/src/main.tsx` rather than a built bundle. **Still required:** validate in staging with Google/Plaid flows, add deliberate violation collection if desired, then refine and enforce a tested CSP; consider COOP/CORP where compatible and add browser E2E tests.
 
 ### 7. CI does not prove production is healthy
 **Evidence:** CI performs install, audit, Node tests, Vite build, and Docker build. It does not verify IONOS reverse proxy rules, SMTP delivery, external provider webhooks, or a staging restore drill.
@@ -77,7 +77,7 @@
 ### 10. Database migration management
 **Evidence:** the previous startup path ran schema changes directly and had no migration history.
 
-**Status: BASELINE MIGRATION FRAMEWORK IMPLEMENTED, CI PENDING.** `server/migrations.js` records ordered schema versions and applies the existing baseline/legacy upgrades in one SQLite transaction. Regression tests cover upgrading a legacy schema while preserving synthetic user data, idempotent restart, and refusing a newer schema version. This framework does not define destructive down migrations; rollback must use the documented backup/restore process. Test it against a production-like sanitized copy and ensure only one app instance runs migrations before release.
+**Status: BASELINE MIGRATION FRAMEWORK IMPLEMENTED; CI PASSED.** `server/migrations.js` records ordered schema versions and applies the existing baseline/legacy upgrades in one SQLite transaction. Regression tests cover upgrading a legacy schema while preserving synthetic user data, idempotent restart, and refusing a newer schema version; these passed in CI run #242. This framework does not define destructive down migrations; rollback must use the documented backup/restore process. Test it against a production-like sanitized copy and ensure only one app instance runs migrations before release.
 
 ### 11. Deployment settings and filesystem protections need verification
 **Evidence:** SQLite is single-instance; database path is environment-defined; reverse-proxy trust is configurable. Repository review cannot verify actual IONOS permissions, durable storage, firewall, DNS, TLS, or publish directory.
@@ -85,16 +85,16 @@
 **Fix:** retain AlmaLinux 9, secure database/backup directories and secrets, bind the app only to loopback behind HTTPS proxy, set TRUST_PROXY_HOPS only to the verified proxy chain, keep port 4000 private, verify data survives container replacement/reboot, and document rollback. Do not change live permissions/DNS by guesswork.
 
 ### 12. Documentation has drifted from the implementation
-**Evidence:** parts of README-PRODUCTION.md still say email verification/password recovery are not implemented, while server/index.js and tests contain those flows. Staging email delivery and restore drills remain unverified, which is a separate claim.
+**Evidence:** this audit previously claimed README-PRODUCTION.md described email verification/password recovery as unimplemented. A current repository search found that the README correctly describes those flows as implemented and distinguishes code from staging verification. That part of the finding was stale. The broader configuration and release checklists still require owner decisions and live verification, but no specific email-recovery documentation mismatch is confirmed.
 
-**Fix:** reconcile every statement against current code; distinguish implemented, automated-tested, tested with a real staging provider, and production-verified. Keep one release checklist as source of truth.
+**Action:** continue reconciling claims against code, CI, staging evidence, and production evidence separately; remove stale claims when found. Do not treat this corrected email-recovery item as a remaining blocker.
 
 ## P3 — product/data quality and resilience
 
 ### 13. Validate financial/date fields consistently
 **Evidence:** create routes sanitize strings but have inconsistent length bounds, enum validation, and date validation. Goals accept sanitized date/contribution strings without validating date format; task title/category/due strings lack maximum lengths; bill/income/subscription routes need consistent enum/range validation.
 
-**Status: PARTIAL FIX IMPLEMENTED IN DRAFT PR #10; CI PASSED.** Shared validators now enforce cents precision, maximum values, calendar dates, frequency/status enums, and boolean types on account, goal, bill, income, and subscription creation. The bill/income/subscription forms use constrained frequency and date inputs. API regressions and frontend type/build checks passed in CI run #234. Money remains stored as SQLite `REAL`, so an integer-cents migration and finance domain rules remain open.
+**Status: PARTIAL FIX IMPLEMENTED IN DRAFT PR #10; CI PASSED.** Shared validators now enforce cents precision, maximum values, calendar dates, frequency/status enums, and boolean types on account, goal, bill, income, and subscription creation. The bill/income/subscription forms use constrained frequency and date inputs. API regressions and frontend type/build checks passed in CI run #242. Money remains stored as SQLite `REAL`, so an integer-cents migration and finance domain rules remain open.
 
 ### 14. Finance calculations need explicit domain rules and tests
 **Evidence:** dashboard safeToSpend/projectedBalance use profile arithmetic; manually entered transactions update current_money, while Plaid imports store transaction rows and connected-account balances separately. This may be intentional but the source-of-truth distinction needs tests.
@@ -104,7 +104,7 @@
 ### 15. Observability and support runbooks must be exercised
 **Evidence:** code logs some provider/SMTP failures, but repository checks do not prove alert routing, request correlation, incident response, or deployed log redaction.
 
-**Status: PARTIAL CODE FIX IMPLEMENTED, CI PENDING.** Provider and server error logs now emit a validated error code or generic classification instead of arbitrary error messages, which can contain personal/provider response data. `server/safe-logging.js` has regression tests for redaction. Request IDs, alert routing, stale-sync/backup/disk monitors, and an assigned incident responder still need implementation and operational proof.
+**Status: PARTIAL CODE FIX IMPLEMENTED; CI PASSED.** Provider and server error logs now emit only an allowlisted stable error code or `UnknownError`, never arbitrary message/code/name strings that could contain personal/provider response data or secrets. `server/safe-logging.js` has regression tests including secret-shaped values. Request IDs, alert routing, stale-sync/backup/disk monitors, and an assigned incident responder still need implementation and operational proof.
 
 ## Items requiring live/staging access
 
@@ -117,12 +117,19 @@ These cannot be conclusively determined from source alone:
 - Off-host backup upload, key recovery, restore time, and deletion propagation through backups/providers.
 - Accessibility, responsive behavior, browser-specific issues, and real-device performance.
 
-## Suggested Codex execution order
+## Release checklist
 
-1. Add fail-closed environment consistency tests and fix startup validation.
-2. Fix/resume Plaid pagination safely and add >10-page tests.
-3. Add rate-limit and field-validation tests; replace or formally constrain process-local limits.
-4. Design XSS/session/CSP changes with threat-model tests.
-5. Validate migrations against a production-like sanitized copy and finalize the rollback-by-restore procedure.
-6. Reconcile documentation and add browser/staging test plans.
-7. Do not claim release readiness until staging, provider, backup/restore, and legal/privacy gates have evidence.
+### Implemented in draft PR #10; automated CI passed on the code commit
+- Fail-closed `NODE_ENV`/`APP_ENV` consistency validation.
+- Resumable Plaid transaction pagination with cursor persistence, replay, partial-failure, and database-reopen tests.
+- Production HttpOnly cookie sessions, CSRF proof, logout/reset revocation, and SQLite-backed single-instance rate limits.
+- Route validation improvements, Stripe webhook idempotency/order protection, versioned baseline migrations, safe error logging, and same-origin deployment checks.
+
+### Remaining release blockers and owner/environment actions
+1. Resolve the live Origin-dependent 403 by inspecting actual host configuration and adding the exact supported site origins; verify the page, every asset, API health, and a real browser after a controlled service restart.
+2. Validate staging with synthetic users and provider test modes, including browser login/recovery/dashboard, Google/Plaid compatibility, Stripe checkout/webhook/cancellation, and SMTP delivery.
+3. Complete a sanitized production-like migration upgrade and a scheduled encrypted off-host backup/restore drill; verify retention, alerts, RPO/RTO, and rollback.
+4. Decide financial source-of-truth rules, money precision migration, transfer/refund/pending semantics, and bank-balance freshness; add calculation tests after the rules are agreed.
+5. Add and run browser E2E/accessibility/responsive checks; current CI does not launch a browser.
+6. Complete independent security review and qualified legal/privacy review; finalize support, deletion/retention, and incident-response ownership.
+7. Keep PR #10 and PR #1 unmerged and production unchanged until the release gates have evidence and the release owner approves deployment.
