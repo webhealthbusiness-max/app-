@@ -11,6 +11,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:
 import { existsSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { fetchPlaidTransactionBatch } from './plaid-pagination.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -1085,22 +1086,12 @@ const syncPlaidConnection = (connection) => {
   const sync = (async () => {
     if (!plaidClient) throw new Error('Bank connections are not configured.')
     const accessToken = decryptBankAccessToken(connection)
-    let cursor = connection.cursor
-    let pageCount = 0
-    let hasMore = false
-    const changes = []
-    do {
-      const response = await plaidClient.transactionsSync({
-        access_token: accessToken,
-        ...(cursor ? { cursor } : {}),
-        count: 500,
-      })
-      const page = response.data
-      changes.push(page)
-      cursor = page.next_cursor
-      hasMore = page.has_more
-      pageCount += 1
-    } while (hasMore && pageCount < 10)
+    const { pages: changes, cursor, hasMore } = await fetchPlaidTransactionBatch({
+      plaidClient,
+      accessToken,
+      cursor: connection.cursor,
+      maxPages: 10,
+    })
 
     const accountResponse = await plaidClient.accountsGet({ access_token: accessToken })
     const addOrUpdateTransaction = db.prepare(`
