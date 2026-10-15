@@ -1711,7 +1711,7 @@ app.post('/api/goals', withUser, (req, res) => {
   }
 
   const result = db.prepare('INSERT INTO goals (user_id, name, current_amount, target_amount, due_date, contribution) VALUES (?, ?, 0, ?, ?, ?)')
-    .run(req.user.id, safeName, safeTarget, safeDate || null, safeContribution)
+    .run(req.user.id, safeName, safeTarget, safeDate, safeContribution)
   const goal = db.prepare('SELECT id, name, current_amount AS current, target_amount AS target, due_date AS date, contribution FROM goals WHERE id = ?').get(result.lastInsertRowid)
   return res.status(201).json(goal)
 })
