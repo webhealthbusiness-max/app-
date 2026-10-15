@@ -1,6 +1,6 @@
 # Grounded production audit findings
 
-**Scope:** source review of `origin/ci-smoke-tests` plus focused remediation work on the uncommitted `codex/comprehensive-remediation` branch. This is not a penetration test or legal/compliance opinion. The public CORS failure is confirmed by read-only HTTP probes. Remediation changes are not committed and have not run in GitHub CI. Local tests requiring installed dependencies, the frontend build, dependency audit, and Docker build remain unverified because this environment lacks npm and native build tools; pure Node tests and syntax checks are listed in the completion report.
+**Scope:** source review of `origin/ci-smoke-tests` plus remediation in draft PR #10, branch `codex/comprehensive-remediation`. This is not a penetration test or legal/compliance opinion. The public CORS failure is confirmed by read-only HTTP probes. GitHub Actions run #234 passed for head `77ad8e104253b750d6223cc4a754e822725a2d22`: `npm ci`, `npm audit --audit-level=moderate`, all `npm test` tests, deployment-checker syntax, frontend build, and Docker build. Local native database tests could not run in this environment because the available `better-sqlite3` binding crashed under Node 22; CI provides the verified test result. Staging/provider, production-configuration, backup/restore, and legal/privacy checks remain outside this CI evidence.
 
 ## Release recommendation
 
@@ -22,7 +22,7 @@
 ### 1. Production environment consistency
 **Evidence:** safeguards depend on `NODE_ENV=production`; `APP_ENV=staging|production` is rejected unless `NODE_ENV=production`.
 
-**Status: FIX IMPLEMENTED, UNCOMMITTED.** Startup also rejects unknown `NODE_ENV` values so a typo such as `Production` cannot silently select development defaults. Regression tests cover the mismatch and invalid value, but server startup tests have not run locally because dependencies are unavailable. CI verification remains required.
+**Status: FIX IMPLEMENTED IN DRAFT PR #10; CI PASSED.** Startup also rejects unknown `NODE_ENV` values so a typo such as `Production` cannot silently select development defaults. Regression tests cover mismatched and invalid values and passed in CI run #234.
 
 ### 2. Plaid sync can get stuck after more than 5,000 changes
 **Evidence:** syncPlaidConnection in server/index.js stops after 10 pages of 500 transactions. When hasMore remains true, it stores the original connection.cursor instead of the last processed cursor.
@@ -34,14 +34,14 @@
 ### 3. Browser session token exposure
 **Evidence:** the previous frontend stored the production bearer JWT in localStorage, where script injection could read it.
 
-**Status: FIX IMPLEMENTED, UNCOMMITTED.** Production now issues Secure, HttpOnly, SameSite session cookies, signed CSRF tokens, revokes sessions on logout, and no longer returns JWTs in JSON. The frontend uses cookies in production and sessionStorage only in non-production. Unit and synthetic production integration tests were added; only the pure cookie unit tests ran locally. Browser E2E, CI, and staging compatibility with Google and Plaid remain unverified. CSP remains report-only and does not block script execution.
+**Status: FIX IMPLEMENTED IN DRAFT PR #10; CI PASSED.** Production now issues Secure, HttpOnly, SameSite session cookies, signed CSRF tokens, revokes sessions on logout, and no longer returns JWTs in JSON. The frontend uses cookies in production and sessionStorage only in non-production. Unit and synthetic production integration tests passed in CI run #234. Browser E2E and staging compatibility with Google and Plaid remain unverified. CSP remains report-only and does not block script execution.
 
 ### 4. In-memory rate limits are not a production abuse-control system
 **Evidence:** the previous implementation used a process-local Map keyed by IP, which reset on restart and lacked per-account limits.
 
 **Failure mode:** restarts/replicas bypass limits; distributed attackers can spray password-reset/verification emails; users behind one shared IP can block each other; stale map entries are cleaned only when the map reaches its bucket cap.
 
-**Status: SINGLE-HOST FIX IMPLEMENTED, UNCOMMITTED.** Rate-limit buckets persist in SQLite across app restarts, are HMAC-keyed rather than storing raw emails/IPs, bound key cardinality, and apply account/user keys alongside IP keys on signup, login, recovery, banking, and billing routes. Database-backed tests were added but could not run locally without `better-sqlite3`. **Still required:** verify proxy IP trust and 429 behavior in staging. SQLite rate limits are only appropriate for a single-host/single-instance model; multi-host deployments require shared storage.
+**Status: SINGLE-HOST FIX IMPLEMENTED IN DRAFT PR #10; CI PASSED.** Rate-limit buckets persist in SQLite across app restarts, are HMAC-keyed rather than storing raw emails/IPs, bound key cardinality, and apply account/user keys alongside IP keys on signup, login, recovery, banking, and billing routes. Persistence, expiry, and key-bound tests passed in CI run #234. **Still required:** verify proxy IP trust and 429 behavior in staging. SQLite rate limits are only appropriate for a single-host/single-instance model; multi-host deployments require shared storage.
 
 ### 5. Production privacy/legal documents are not ready
 **Evidence:** server/index.js labels the privacy page a pre-launch disclosure and says production retention, backup-erasure policy, and independent privacy review are missing. Terms are explicitly drafts. README-PRODUCTION.md lists counsel review and retention/deletion review as outstanding.
@@ -96,7 +96,7 @@
 ### 13. Validate financial/date fields consistently
 **Evidence:** create routes sanitize strings but have inconsistent length bounds, enum validation, and date validation. Goals accept sanitized date/contribution strings without validating date format; task title/category/due strings lack maximum lengths; bill/income/subscription routes need consistent enum/range validation.
 
-**Status: PARTIAL FIX IMPLEMENTED, UNCOMMITTED.** Shared validators now enforce cents precision, maximum values, calendar dates, frequency/status enums, and boolean types on account, goal, bill, income, and subscription creation. The bill/income/subscription forms use constrained frequency and date inputs. Route regression tests were added; the API suite and frontend type/build check have not run locally. Money remains stored as SQLite `REAL`, so an integer-cents migration and finance domain rules remain open.
+**Status: PARTIAL FIX IMPLEMENTED IN DRAFT PR #10; CI PASSED.** Shared validators now enforce cents precision, maximum values, calendar dates, frequency/status enums, and boolean types on account, goal, bill, income, and subscription creation. The bill/income/subscription forms use constrained frequency and date inputs. API regressions and frontend type/build checks passed in CI run #234. Money remains stored as SQLite `REAL`, so an integer-cents migration and finance domain rules remain open.
 
 ### 14. Finance calculations need explicit domain rules and tests
 **Evidence:** dashboard safeToSpend/projectedBalance use profile arithmetic; manually entered transactions update current_money, while Plaid imports store transaction rows and connected-account balances separately. This may be intentional but the source-of-truth distinction needs tests.
