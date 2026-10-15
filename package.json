@@ -14,7 +14,8 @@
     "server": "node --env-file-if-exists=.env server/index.js",
     "start": "node --env-file-if-exists=.env server/index.js",
     "backup": "node scripts/backup-db.js",
-    "restore": "node scripts/restore-db.js"
+    "restore": "node scripts/restore-db.js",
+    "check:deployment": "node scripts/check-deployment.mjs"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
