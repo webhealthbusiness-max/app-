@@ -126,21 +126,26 @@ test('email verification and password recovery use expiring single-use hashed to
 })
 
 test('staging and production APP_ENV values require NODE_ENV=production', () => {
-  const result = runWithProductionEnv({ NODE_ENV: 'development', APP_ENV: 'production' })
-  assert.notEqual(result.status, 0, 'production APP_ENV must not run with development NODE_ENV')
-  assert.match(result.stderr, /APP_ENV=staging or production requires NODE_ENV=production/)
+  for (const nodeEnv of ['development', 'test', '']) {
+    const result = runWithProductionEnv({ NODE_ENV: nodeEnv, APP_ENV: 'production' })
+    assert.notEqual(result.status, 0, `APP_ENV=production must reject NODE_ENV=${nodeEnv || '(unset)'}`)
+    assert.match(result.stderr, /APP_ENV=staging or production requires NODE_ENV=production/)
+  }
+  const staging = runWithProductionEnv({ NODE_ENV: 'development', APP_ENV: 'staging' })
+  assert.notEqual(staging.status, 0, 'APP_ENV=staging must reject development NODE_ENV')
+  assert.match(staging.stderr, /APP_ENV=staging or production requires NODE_ENV=production/)
 })
 
-test('Plaid sync persists the latest processed cursor when more pages remain', async () => {
+test('Plaid sync commits changes and the latest processed cursor in one transaction', async () => {
   const { readFile } = await import('node:fs/promises')
   const source = await readFile(serverPath, 'utf8')
   const syncStart = source.indexOf('const syncPlaidConnection =')
-  const syncEnd = source.indexOf('\nconst bankSyncTimer', syncStart)
+  const syncEnd = source.indexOf('\\nconst bankSyncTimer', syncStart)
   assert.notEqual(syncStart, -1, 'Plaid sync function must exist')
   const sync = source.slice(syncStart, syncEnd)
-  assert.match(sync, /while \(hasMore && pageCount < 10\)/, 'sync must bound one run')
-  assert.match(sync, /\.run\(cursor, connection\.item_id, connection\.user_id\)/, 'sync must save the latest processed cursor even when another batch remains')
-  assert.doesNotMatch(sync, /\.run\(hasMore \? connection\.cursor : cursor/, 'sync must not retain the old cursor when more pages remain')
+  assert.match(sync, /fetchPlaidTransactionBatch\\([\\s\\S]*maxPages: 10/, 'sync must fetch bounded resumable batches')
+  assert.match(sync, /\\.run\\(cursor, connection\\.item_id, connection\\.user_id\\)/, 'sync must save the latest processed cursor even when another batch remains')
+  assert.match(sync, /db\\.transaction\\(\\(\\) => \\{[\\s\\S]*UPDATE bank_connections[\\s\\S]*\\.run\\(cursor, connection\\.item_id, connection\\.user_id\\)/, 'page mutations and checkpoint must commit atomically')
 })
 
 test('task creation bounds every user-controlled text field', async () => {
