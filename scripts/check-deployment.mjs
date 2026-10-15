@@ -77,10 +77,22 @@ let failures = 0
 for (const url of references) {
   const result = await request(url)
   const parsed = new URL(url)
+  const pathname = parsed.pathname.toLowerCase()
+  const contentType = result.contentType.toLowerCase()
+  const expectedType = pathname.endsWith('.css')
+    ? 'text/css'
+    : /\\.(?:m?js)$/.test(pathname)
+      ? 'javascript'
+      : null
+  const wrongType = result.ok && expectedType === 'text/css' && !contentType.includes('text/css')
+    || result.ok && expectedType === 'javascript' && !/(?:javascript|ecmascript)/.test(contentType)
   console.log(`ASSET ${result.status} ${parsed.pathname}${result.contentType ? ` [${result.contentType}]` : ''}`)
   if (!result.ok) {
     failures++
     if (result.error) console.log(`  Error: ${result.error}`)
+  } else if (wrongType) {
+    failures++
+    console.error(`  ERROR: expected a ${expectedType} content type; this can indicate an SPA fallback or host MIME-type rule.`)
   }
 }
 console.log(`Checked ${references.size} same-origin asset(s); failures: ${failures}.`)
