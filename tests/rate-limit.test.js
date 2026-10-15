@@ -13,6 +13,7 @@ test('SQLite rate limits survive limiter recreation, reset expired windows, and 
 
   assert.equal(first.consume('login:ip:192.0.2.4', 2), true)
   assert.equal(first.consume('login:subject:sample@example.test', 2), true)
+  assert.equal(first.consume('login:subject:sample@example.test', 2), true)
   assert.equal(first.consume('login:ip:192.0.2.4', 2), true)
 
   const afterRestart = createRateLimiter({ db, secret, windowMs: 5000, now: () => time })
