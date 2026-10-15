@@ -1,6 +1,6 @@
 # Grounded production audit findings
 
-**Scope:** static review of the ci-smoke-tests branch. This is not a penetration test, a verified live-site probe, or a legal/compliance opinion. Code-backed findings are distinguished from operational items that require staging or host access.
+**Scope:** static review of the ci-smoke-tests branch. This is not a penetration test, a verified live-site probe, or a legal/compliance opinion. Follow-up fixes have since been committed on this branch for findings 1, 2, and task field bounds under finding 13; these fixes remain subject to CI and review. Other items below remain open unless explicitly marked otherwise.
 
 ## Release recommendation
 
@@ -13,7 +13,7 @@
 
 **Failure mode:** if a host is misconfigured with APP_ENV=production but NODE_ENV is missing/incorrect, startup guards can be skipped and the development JWT fallback can be used. This is a fail-open configuration path even though the documented Dockerfile sets both values.
 
-**Fix:** reject inconsistent combinations at startup; require NODE_ENV=production whenever APP_ENV is staging or production; never permit the development JWT fallback outside explicit development/test; add startup tests for every invalid combination.
+**Status: FIX COMMITTED on ci-smoke-tests; CI pending.** Startup now rejects APP_ENV=staging/production unless NODE_ENV=production, with a regression test for the production/development mismatch. Further startup configuration combinations should still be covered.
 
 ### 2. Plaid sync can get stuck after more than 5,000 changes
 **Evidence:** syncPlaidConnection in server/index.js stops after 10 pages of 500 transactions. When hasMore remains true, it stores the original connection.cursor instead of the last processed cursor.
@@ -89,7 +89,7 @@
 ### 13. Validate financial/date fields consistently
 **Evidence:** create routes sanitize strings but have inconsistent length bounds, enum validation, and date validation. Goals accept sanitized date/contribution strings without validating date format; task title/category/due strings lack maximum lengths; bill/income/subscription routes need consistent enum/range validation.
 
-**Fix:** centralize request schemas for every API route; cap text/array sizes; validate real calendar dates, frequency/status/type enums, numeric precision/ranges; use integer minor units for money or explicitly test decimal storage/rounding. Add malformed, oversized, negative, and boundary tests.
+**Status: PARTIAL FIX COMMITTED on ci-smoke-tests; CI pending.** Task title/category/due text fields now have maximum lengths and a regression test. Remaining routes still need centralized schema validation, real date and enum validation, numeric precision/range tests, and a documented money precision strategy.
 
 ### 14. Finance calculations need explicit domain rules and tests
 **Evidence:** dashboard safeToSpend/projectedBalance use profile arithmetic; manually entered transactions update current_money, while Plaid imports store transaction rows and connected-account balances separately. This may be intentional but the source-of-truth distinction needs tests.
