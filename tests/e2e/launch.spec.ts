@@ -81,10 +81,10 @@ test('built assets load with browser MIME types and the public signup screen ren
 test('login initializes the dashboard and removes the loading splash', async ({ page }) => {
   await installApiMocks(page)
   await page.goto('/')
-  await page.getByRole('button', { name: 'Log in', exact: true }).click()
+  await page.getByRole('button', { name: 'Log in', exact: true }).first().click()
   await page.getByLabel('Email').fill('synthetic@example.test')
   await page.getByLabel('Password').fill('synthetic-password')
-  await page.getByRole('button', { name: 'Log in', exact: true }).click()
+  await page.getByRole('button', { name: 'Log in', exact: true }).last().click()
 
   await expect(page.getByRole('heading', { name: 'Welcome back, Synthetic User.' })).toBeVisible()
   await expect(page.getByText('$1,250.00').first()).toBeVisible()
@@ -95,7 +95,7 @@ test('login initializes the dashboard and removes the loading splash', async ({ 
 test('password recovery shows the generic success response', async ({ page }) => {
   await installApiMocks(page)
   await page.goto('/')
-  await page.getByRole('button', { name: 'Log in', exact: true }).click()
+  await page.getByRole('button', { name: 'Log in', exact: true }).first().click()
   await page.getByRole('button', { name: 'Forgot password?' }).click()
   await page.getByLabel('Email').fill('synthetic@example.test')
   await page.getByRole('button', { name: 'Send reset link' }).click()
