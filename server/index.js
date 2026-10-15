@@ -1738,8 +1738,8 @@ app.post('/api/tasks', withUser, (req, res) => {
   const safeDue = sanitizeText(due)
   const safePriority = ['High', 'Medium', 'Low'].includes(String(priority || '')) ? String(priority) : 'Medium'
 
-  if (!safeTitle || !safeCategory || !safeDue || !safePriority) {
-    return res.status(400).json({ error: 'Task details are required.' })
+  if (!safeTitle || safeTitle.length > 120 || !safeCategory || safeCategory.length > 80 || !safeDue || safeDue.length > 80 || !safePriority) {
+    return res.status(400).json({ error: 'Task details are required and must fit the allowed field lengths.' })
   }
 
   const result = db.prepare('INSERT INTO tasks (user_id, title, category, due_label, priority, completed) VALUES (?, ?, ?, ?, ?, 0)').run(req.user.id, safeTitle, safeCategory, safeDue, safePriority)
