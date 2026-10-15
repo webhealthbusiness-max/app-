@@ -20,7 +20,7 @@
 
 **Failure mode:** the next sync starts from the same old cursor and can repeat the first 5,000 changes indefinitely, so later transaction changes may never arrive. The endpoint reports complete:false but has no durable continuation mechanism for the next batch.
 
-**Status: PARTIAL FIX COMMITTED on ci-smoke-tests; CI passed for commit 3bc9fc88fee878ae8006f99b8f78bab086b41428.** The sync now persists the latest processed cursor alongside the transaction changes, so the next scheduled run can continue instead of restarting from the old cursor. Current regression coverage checks source structure only. **Still required:** a deterministic integration test with more than 10 pages proving the cursor advances and added/modified/removed transactions remain correct across retries/restarts.
+**Status: PARTIAL FIX COMMITTED; mocked pagination test added in commit `32fd980a`.** The sync persists the latest processed cursor with transaction changes, so the next run can continue rather than restarting from the old cursor. The new mocked test exercises an 11-page sequence, confirms a run stops at 10 pages, and confirms the next run resumes from the saved cursor. **Still required:** verify the new test in CI and add coverage for added/modified/removed transaction persistence, provider errors/retries, and crash semantics.
 
 ### 3. Browser bearer token is stored in localStorage
 **Evidence:** src/App.tsx reads/writes grounded-token in localStorage; that JWT authorizes finance-data API requests.
