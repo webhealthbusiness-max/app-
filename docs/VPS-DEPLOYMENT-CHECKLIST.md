@@ -4,7 +4,7 @@ Status: preparation only. Grounded is not deployed. The current release PR remai
 
 ## Target architecture
 
-- One Ubuntu LTS VPS, Docker Engine + Compose, one Grounded application container, and Caddy as the HTTPS reverse proxy.
+- Existing host: AlmaLinux 9 VPS. Keep this OS; do not reinstall it to match a generic guide. Use Docker Engine + Compose only after verifying the install procedure and security updates for the actual AlmaLinux 9 release, one Grounded application container, and Caddy as the HTTPS reverse proxy. The commands in this guide are architecture/checklist guidance, not a reason to replace the current OS.
 - Grounded listens inside the container on port 4000. Publish it only to loopback (127.0.0.1), not directly to the public internet.
 - Persist SQLite at /data/grounded.db using a named volume or dedicated disk. The app currently requires exactly one API instance; do not horizontally scale it.
 - Caddy exposes ports 80/443 and obtains/renews TLS certificates automatically after DNS points to the VPS.
@@ -19,15 +19,17 @@ Status: preparation only. Grounded is not deployed. The current release PR remai
 
 ## Phase 2 — provision and harden the VPS
 
-- [ ] Choose a supported Ubuntu LTS image. For an initial small deployment, start around 2 vCPU, 4 GB RAM, and 40+ GB SSD, then monitor and resize as needed. This is a starting point, not a capacity guarantee.
+- [ ] Confirm the current AlmaLinux 9 VPS has supported resources and current security updates. Do not reinstall the OS. A small starting point is around 2 vCPU, 4 GB RAM, and 40+ GB SSD, then monitor and resize as needed; this is not a capacity guarantee.
 - [ ] Create a non-root administrator account and install your SSH public key. Verify key login in a second session before changing SSH settings. Disable password-based SSH and root SSH login only after key access is confirmed.
 - [ ] Apply OS security updates; enable automatic security updates.
 - [ ] Configure the provider firewall and host firewall to allow inbound TCP 22 (preferably restricted to your IP), 80, and 443 only. Do not expose 4000, SQLite files, Docker API, or SSH to the whole internet unnecessarily.
-- [ ] Install Docker Engine and the Docker Compose plugin from Docker's official Ubuntu instructions.
+- [ ] Install Docker Engine and the Docker Compose plugin using the official Docker instructions applicable to AlmaLinux/RHEL-compatible systems. Confirm the package repository and commands match AlmaLinux 9 before executing; do not copy Ubuntu `apt` commands.
 - [ ] Configure time synchronization, disk-space monitoring, and a non-root deployment procedure.
 - [ ] Keep staging and production on separate hosts where possible; never copy live user data to staging.
 
-## Phase 3 — deploy staging first
+## Phase 3 — diagnose the current public deployment and deploy staging first
+
+Before changing DNS, web-root permissions, proxy rules, or the production service, run the unauthenticated public asset check from a trusted machine with Node.js 22+: `npm run check:deployment -- https://www.mygroundedfinance.online`. The script reports the HTTP status of the HTML page and same-origin JS/CSS/images it references, warns if the page still references `/src/main.tsx`, and exits non-zero if an asset fails. It does not send credentials, test login, or change the site. Save only the status/path output—never cookies, tokens, environment values, or personal financial data. If the command reports a JS/CSS 403, inspect the exact failing path against the configured IONOS publish directory and server/proxy access rules. If it reports `/src/main.tsx`, publish the generated `dist/` output rather than the source root. Do not broadly loosen permissions or disable security rules as a workaround.
 
 1. Keep the current PR open and unmerged. Once CI passes, deploy the PR branch only to the staging environment for validation; never deploy that branch as production.
 2. Build the container from the exact reviewed commit. Do not build an image from an unreviewed pull request for production.
