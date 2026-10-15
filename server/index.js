@@ -339,7 +339,22 @@ app.use((req, res, next) => {
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
   res.setHeader('Permissions-Policy', 'geolocation=(), microphone=(), camera=()')
   if (req.path.startsWith('/api')) res.setHeader('Cache-Control', 'no-store')
-  if (isProduction) res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+  if (isProduction) {
+    res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains')
+    // Start CSP in report-only mode so Google Identity, Plaid Link, fonts, and
+    // checkout flows can be validated in staging before enforcing a policy.
+    res.setHeader(
+      'Content-Security-Policy-Report-Only',
+      "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; " +
+      "script-src 'self' https://accounts.google.com https://cdn.plaid.com; " +
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+      "font-src 'self' data: https://fonts.gstatic.com; " +
+      "img-src 'self' data: blob: https:; " +
+      "connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://*.plaid.com https://api.stripe.com; " +
+      "frame-src https://accounts.google.com https://*.plaid.com; " +
+      "form-action 'self' https://checkout.stripe.com"
+    )
+  }
   next()
 })
 
