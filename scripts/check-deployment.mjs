@@ -66,7 +66,8 @@ for (const match of html.matchAll(pattern)) {
 }
 
 if (html.includes('/src/main.tsx')) {
-  console.error('WARNING: served HTML references /src/main.tsx (Vite source entry), not a built bundle.')
+  console.error('ERROR: served HTML references /src/main.tsx (Vite source entry), not a built bundle. Publish the generated dist/ output instead.')
+  process.exit(1)
 }
 if (references.size === 0) {
   console.error('WARNING: no same-origin built assets were discovered in the returned HTML.')
