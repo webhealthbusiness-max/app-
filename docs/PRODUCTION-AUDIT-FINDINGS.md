@@ -1,6 +1,6 @@
 # Grounded production audit findings
 
-**Scope:** static review of the ci-smoke-tests branch. This is not a penetration test, a verified live-site probe, or a legal/compliance opinion. Follow-up fixes have since been committed on this branch for findings 1, 2, and task field bounds under finding 13; these fixes remain subject to CI and review. Other items below remain open unless explicitly marked otherwise.
+**Scope:** static review of the ci-smoke-tests branch. This is not a penetration test, a verified live-site probe, or a legal/compliance opinion. Follow-up fixes have since been committed on this branch for findings 1, 2, and task field bounds under finding 13; CI passed for commit 3bc9fc88fee878ae8006f99b8f78bab086b41428. The CSP report-only baseline added afterward still requires its own CI run and staging browser review. Other items below remain open unless explicitly marked otherwise.
 
 ## Release recommendation
 
@@ -13,14 +13,14 @@
 
 **Failure mode:** if a host is misconfigured with APP_ENV=production but NODE_ENV is missing/incorrect, startup guards can be skipped and the development JWT fallback can be used. This is a fail-open configuration path even though the documented Dockerfile sets both values.
 
-**Status: FIX COMMITTED on ci-smoke-tests; CI pending.** Startup now rejects APP_ENV=staging/production unless NODE_ENV=production, with a regression test for the production/development mismatch. Further startup configuration combinations should still be covered.
+**Status: FIX COMMITTED on ci-smoke-tests; CI passed for commit 3bc9fc88fee878ae8006f99b8f78bab086b41428.** Startup now rejects APP_ENV=staging/production unless NODE_ENV=production, with a regression test for the production/development mismatch. Further startup configuration combinations should still be covered.
 
 ### 2. Plaid sync can get stuck after more than 5,000 changes
 **Evidence:** syncPlaidConnection in server/index.js stops after 10 pages of 500 transactions. When hasMore remains true, it stores the original connection.cursor instead of the last processed cursor.
 
 **Failure mode:** the next sync starts from the same old cursor and can repeat the first 5,000 changes indefinitely, so later transaction changes may never arrive. The endpoint reports complete:false but has no durable continuation mechanism for the next batch.
 
-**Fix:** persist a safe continuation cursor/checkpoint and resume from it, or process all pages with a bounded time/page policy that resumes safely. Define crash/retry semantics for page changes and cursor commits. Add a deterministic test with more than 10 pages and prove the final cursor advances and every added/modified/removed transaction is reflected correctly after retries/restarts.
+**Status: PARTIAL FIX COMMITTED on ci-smoke-tests; CI passed for commit 3bc9fc88fee878ae8006f99b8f78bab086b41428.** The sync now persists the latest processed cursor alongside the transaction changes, so the next scheduled run can continue instead of restarting from the old cursor. Current regression coverage checks source structure only. **Still required:** a deterministic integration test with more than 10 pages proving the cursor advances and added/modified/removed transactions remain correct across retries/restarts.
 
 ### 3. Browser bearer token is stored in localStorage
 **Evidence:** src/App.tsx reads/writes grounded-token in localStorage; that JWT authorizes finance-data API requests.
@@ -48,7 +48,7 @@
 ### 6. Browser security policy and hardening validation are incomplete
 **Evidence:** server sets nosniff, frame denial, referrer policy, permissions policy, and HSTS in production, but no CSP. The reviewed CI configuration has no browser end-to-end tests.
 
-**Fix:** design CSP from actual dependencies, consider COOP/CORP where compatible, validate HTTPS/TLS and headers against the deployed origin, and add browser E2E tests for sign-in, app startup, navigation, OAuth/Plaid redirects, and failed asset handling.
+**Status: PARTIAL FIX COMMITTED after the last CI-passing SHA.** Production now emits an initial `Content-Security-Policy-Report-Only` baseline without `unsafe-eval`; it is not an enforcement policy and may generate browser reports until provider compatibility is checked. **Still required:** run CI for the latest commit, validate in staging with Google/Plaid flows, then refine and enforce a tested CSP; consider COOP/CORP where compatible and add browser E2E tests.
 
 ### 7. CI does not prove production is healthy
 **Evidence:** CI performs install, audit, Node tests, Vite build, and Docker build. It does not verify IONOS reverse proxy rules, SMTP delivery, external provider webhooks, or a staging restore drill.
@@ -89,7 +89,7 @@
 ### 13. Validate financial/date fields consistently
 **Evidence:** create routes sanitize strings but have inconsistent length bounds, enum validation, and date validation. Goals accept sanitized date/contribution strings without validating date format; task title/category/due strings lack maximum lengths; bill/income/subscription routes need consistent enum/range validation.
 
-**Status: PARTIAL FIX COMMITTED on ci-smoke-tests; CI pending.** Task title/category/due text fields now have maximum lengths and a regression test. Remaining routes still need centralized schema validation, real date and enum validation, numeric precision/range tests, and a documented money precision strategy.
+**Status: PARTIAL FIX COMMITTED on ci-smoke-tests; CI passed for commit 3bc9fc88fee878ae8006f99b8f78bab086b41428.** Task title/category/due text fields now have maximum lengths and a regression test. Remaining routes still need centralized schema validation, real date and enum validation, numeric precision/range tests, and a documented money precision strategy.
 
 ### 14. Finance calculations need explicit domain rules and tests
 **Evidence:** dashboard safeToSpend/projectedBalance use profile arithmetic; manually entered transactions update current_money, while Plaid imports store transaction rows and connected-account balances separately. This may be intentional but the source-of-truth distinction needs tests.
