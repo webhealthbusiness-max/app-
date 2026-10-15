@@ -46,9 +46,9 @@
 ## P2 — resolve before public launch
 
 ### 6. Browser security policy and hardening validation are incomplete
-**Evidence:** server sets nosniff, frame denial, referrer policy, permissions policy, and HSTS in production, but no CSP. The reviewed CI configuration has no browser end-to-end tests.
+**Evidence:** server sets nosniff, frame denial, referrer policy, permissions policy, and HSTS in production. A CSP `Report-Only` baseline was added, but enforcement and browser end-to-end tests are still absent.
 
-**Status: PARTIAL FIX COMMITTED after the last CI-passing SHA.** Production now emits an initial `Content-Security-Policy-Report-Only` baseline without `unsafe-eval`; it is not an enforcement policy and may generate browser reports until provider compatibility is checked. The latest code also allows manually triggering CI from GitHub Actions. **Still required:** run CI for the latest commit, validate in staging with Google/Plaid flows, then refine and enforce a tested CSP; consider COOP/CORP where compatible and add browser E2E tests.
+**Status: PARTIAL FIX COMMITTED.** Production emits an initial `Content-Security-Policy-Report-Only` baseline without `unsafe-eval`. This policy does not block violations; without a configured `report-uri`/`report-to` collector, violations are visible primarily in browser developer tools rather than centrally collected. The latest code also allows manually triggering CI from GitHub Actions, and the deployment checker now fails if the page serves `/src/main.tsx` rather than a built bundle. **Still required:** confirm CI for the latest commit, validate in staging with Google/Plaid flows, add deliberate violation collection if desired, then refine and enforce a tested CSP; consider COOP/CORP where compatible and add browser E2E tests.
 
 ### 7. CI does not prove production is healthy
 **Evidence:** CI performs install, audit, Node tests, Vite build, and Docker build. It does not verify IONOS reverse proxy rules, SMTP delivery, external provider webhooks, or a staging restore drill.
