@@ -104,8 +104,8 @@
 ## Items requiring live/staging access
 
 These cannot be conclusively determined from source alone:
-- Whether public HTML references built assets or the Vite source entry.
-- Exact status of each production JS/CSS asset and whether IONOS permissions/rewrite/proxy rules cause the reported loading failure.
+- A read-only check during this audit fetched the public homepage and all six same-origin assets it referenced: the page, JS, CSS, logo, manifest, and splash image returned HTTP 200. The reported 403 was not reproduced in this check. This does not verify authenticated app initialization or prove the cause/history of the reported incident.
+- Whether the observed public deployment matches the intended release commit/build, or whether IONOS permissions/rewrite/proxy rules caused an earlier or intermittent loading failure.
 - DNS, certificate chain, TLS, firewall, SSH, and actual volume persistence.
 - SMTP deliverability/domain authentication, Stripe test checkout/webhook lifecycle, Plaid Sandbox/OAuth redirect behavior.
 - Off-host backup upload, key recovery, restore time, and deletion propagation through backups/providers.
