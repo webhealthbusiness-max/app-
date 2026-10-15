@@ -23,7 +23,7 @@ Grounded shows a branded launch screen while the app starts and verifies a saved
 - Sign up with email/password
 - Login with the same credentials
 - Optional Google sign-in using a verified Google Identity Services ID token
-- All protected routes use a bearer token from the login response
+- In production, protected routes use Secure, HttpOnly, SameSite session cookies with CSRF proof; bearer tokens are returned only in non-production environments
 
 ## Account notifications and email
 

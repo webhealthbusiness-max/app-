@@ -22,7 +22,7 @@
 ### 1. Production environment consistency
 **Evidence:** safeguards depend on `NODE_ENV=production`; `APP_ENV=staging|production` is rejected unless `NODE_ENV=production`.
 
-**Status: FIX IMPLEMENTED IN DRAFT PR #10; CI PASSED.** Startup also rejects unknown `NODE_ENV` values so a typo such as `Production` cannot silently select development defaults. Regression tests cover mismatched and invalid values and passed in CI run #250.
+**Status: FIX IMPLEMENTED IN DRAFT PR #10; CI PASSED.** Startup also rejects unknown `NODE_ENV` values so a typo such as `Production` cannot silently select development defaults. Regression tests cover mismatched and invalid values and passed in CI run #254.
 
 ### 2. Plaid sync can get stuck after more than 5,000 changes
 **Evidence:** syncPlaidConnection in server/index.js stops after 10 pages of 500 transactions. When hasMore remains true, it stores the original connection.cursor instead of the last processed cursor.
@@ -34,14 +34,14 @@
 ### 3. Browser session token exposure
 **Evidence:** the previous frontend stored the production bearer JWT in localStorage, where script injection could read it.
 
-**Status: FIX IMPLEMENTED IN DRAFT PR #10; CI PASSED.** Production now issues Secure, HttpOnly, SameSite session cookies, signed CSRF tokens, revokes sessions on logout, and no longer returns JWTs in JSON. The frontend uses cookies in production and sessionStorage only in non-production. Unit and synthetic production integration tests passed in CI run #250. The added browser E2E suite covers built asset delivery and mocked login/dashboard/recovery; staging compatibility with Google and Plaid remains unverified. CSP remains report-only and does not block script execution.
+**Status: FIX IMPLEMENTED IN DRAFT PR #10; CI PASSED.** Production now issues Secure, HttpOnly, SameSite session cookies, signed CSRF tokens, revokes sessions on logout, and no longer returns JWTs in JSON. The frontend uses cookies in production and sessionStorage only in non-production. Unit and synthetic production integration tests passed in CI run #254. The added browser E2E suite covers built asset delivery and mocked login/dashboard/recovery; staging compatibility with Google and Plaid remains unverified. CSP remains report-only and does not block script execution.
 
 ### 4. In-memory rate limits are not a production abuse-control system
 **Evidence:** the previous implementation used a process-local Map keyed by IP, which reset on restart and lacked per-account limits.
 
 **Failure mode:** restarts/replicas bypass limits; distributed attackers can spray password-reset/verification emails; users behind one shared IP can block each other; stale map entries are cleaned only when the map reaches its bucket cap.
 
-**Status: SINGLE-HOST FIX IMPLEMENTED IN DRAFT PR #10; CI PASSED.** Rate-limit buckets persist in SQLite across app restarts, are HMAC-keyed rather than storing raw emails/IPs, bound key cardinality, and apply account/user keys alongside IP keys on signup, login, recovery, banking, and billing routes. Persistence, expiry, and key-bound tests passed in CI run #250. Production now defaults to one trusted proxy hop, matching the documented Caddy-to-app topology; verify the actual chain and 429 behavior in staging. SQLite rate limits are only appropriate for a single-host/single-instance model; multi-host deployments require shared storage.
+**Status: SINGLE-HOST FIX IMPLEMENTED IN DRAFT PR #10; CI PASSED.** Rate-limit buckets persist in SQLite across app restarts, are HMAC-keyed rather than storing raw emails/IPs, bound key cardinality, and apply account/user keys alongside IP keys on signup, login, recovery, banking, and billing routes. Persistence, expiry, and key-bound tests passed in CI run #254. Production now defaults to one trusted proxy hop, matching the documented Caddy-to-app topology; verify the actual chain and 429 behavior in staging. SQLite rate limits are only appropriate for a single-host/single-instance model; multi-host deployments require shared storage.
 
 ### 5. Production privacy/legal documents are not ready
 **Evidence:** server/index.js labels the privacy page a pre-launch disclosure and says production retention, backup-erasure policy, and independent privacy review are missing. Terms are explicitly drafts. README-PRODUCTION.md lists counsel review and retention/deletion review as outstanding.
@@ -77,7 +77,7 @@
 ### 10. Database migration management
 **Evidence:** the previous startup path ran schema changes directly and had no migration history.
 
-**Status: BASELINE MIGRATION FRAMEWORK IMPLEMENTED; CI PASSED.** `server/migrations.js` records ordered schema versions and applies the existing baseline/legacy upgrades in one SQLite transaction. Regression tests cover upgrading a legacy schema while preserving synthetic user data, idempotent restart, and refusing a newer schema version; these passed in CI run #250. This framework does not define destructive down migrations; rollback must use the documented backup/restore process. Test it against a production-like sanitized copy and ensure only one app instance runs migrations before release.
+**Status: BASELINE MIGRATION FRAMEWORK IMPLEMENTED; CI PASSED.** `server/migrations.js` records ordered schema versions and applies the existing baseline/legacy upgrades in one SQLite transaction. Regression tests cover upgrading a legacy schema while preserving synthetic user data, idempotent restart, and refusing a newer schema version; these passed in CI run #254. This framework does not define destructive down migrations; rollback must use the documented backup/restore process. Test it against a production-like sanitized copy and ensure only one app instance runs migrations before release.
 
 ### 11. Deployment settings and filesystem protections need verification
 **Evidence:** SQLite is single-instance; database path is environment-defined; reverse-proxy trust is configurable. Repository review cannot verify actual IONOS permissions, durable storage, firewall, DNS, TLS, or publish directory.
@@ -94,7 +94,7 @@
 ### 13. Validate financial/date fields consistently
 **Evidence:** create routes sanitize strings but have inconsistent length bounds, enum validation, and date validation. Goals accept sanitized date/contribution strings without validating date format; task title/category/due strings lack maximum lengths; bill/income/subscription routes need consistent enum/range validation.
 
-**Status: PARTIAL FIX IMPLEMENTED IN DRAFT PR #10; CI PASSED.** Shared validators now enforce cents precision, maximum values, calendar dates, frequency/status enums, and boolean types on account, goal, bill, income, and subscription creation. The bill/income/subscription forms use constrained frequency and date inputs. API regressions and frontend type/build checks passed in CI run #250. Money remains stored as SQLite `REAL`, so an integer-cents migration and finance domain rules remain open.
+**Status: PARTIAL FIX IMPLEMENTED IN DRAFT PR #10; CI PASSED.** Shared validators now enforce at most two decimal places, maximum values, calendar dates, frequency/status enums, and boolean types on account, goal, bill, income, and subscription creation. The bill/income/subscription forms use constrained frequency and date inputs. API regressions and frontend type/build checks passed in CI run #254. Most amount columns use SQLite `INTEGER` affinity, while account balances use `REAL`; API values use JavaScript `Number` in dollar units, and SQLite can store non-integral values in an INTEGER-affinity column. The schema does not enforce integer minor units, so decimal representation/rounding policy and financial domain rules remain open.
 
 ### 14. Finance calculations need explicit domain rules and tests
 **Evidence:** dashboard safeToSpend/projectedBalance use profile arithmetic; manually entered transactions update current_money, while Plaid imports store transaction rows and connected-account balances separately. This may be intentional but the source-of-truth distinction needs tests.
@@ -130,6 +130,6 @@ These cannot be conclusively determined from source alone:
 2. Validate staging with synthetic users and provider test modes, including browser login/recovery/dashboard, Google/Plaid compatibility, Stripe checkout/webhook/cancellation, and SMTP delivery.
 3. Complete a sanitized production-like migration upgrade and a scheduled encrypted off-host backup/restore drill; verify retention, alerts, RPO/RTO, and rollback.
 4. Decide financial source-of-truth rules, money precision migration, transfer/refund/pending semantics, and bank-balance freshness; add calculation tests after the rules are agreed.
-5. Browser E2E tests for built asset MIME/status, signup screen/splash, login/dashboard initialization, and generic password recovery passed in CI run #250. Staging provider flows, accessibility, responsive behavior, and real-device checks remain open.
+5. Browser E2E tests for built asset MIME/status, signup screen/splash, login/dashboard initialization, and generic password recovery passed in CI run #254. Staging provider flows, accessibility, responsive behavior, and real-device checks remain open.
 6. Complete independent security review and qualified legal/privacy review; finalize support, deletion/retention, and incident-response ownership.
 7. Keep PR #10 and PR #1 unmerged and production unchanged until the release gates have evidence and the release owner approves deployment.
