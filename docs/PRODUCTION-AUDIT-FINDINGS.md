@@ -1,6 +1,6 @@
 # Grounded production audit findings
 
-**Scope:** source review of `origin/ci-smoke-tests` plus remediation in draft PR #10, branch `codex/comprehensive-remediation`. This is not a penetration test or legal/compliance opinion. GitHub Actions run [#254](https://github.com/webhealthbusiness-max/app-/actions/runs/38682983020) passed on code head `13518e0f3757c17bc586fe4e190fe422e03cdec7`: `npm ci`, `npm audit --audit-level=moderate`, all `npm test` tests, deployment-checker syntax, frontend build, Playwright Chromium E2E, and Docker build. Local Node 22.23.3 checks on that code passed the 39-test suite, audit (zero vulnerabilities), and frontend build. Local Playwright could not launch because `libnspr4.so` is absent; local Docker build was denied by Docker socket permissions. Staging/provider, production-configuration, backup/restore, and legal/privacy checks remain outside this CI evidence. See [the consolidated production readiness report](PRODUCTION-READINESS-REPORT.md) for current results and release steps.
+**Scope:** source review of `origin/ci-smoke-tests` plus remediation in draft PR #10, branch `codex/comprehensive-remediation`. This is not a penetration test or legal/compliance opinion. GitHub Actions run [#258](https://github.com/webhealthbusiness-max/app-/actions/runs/38683824361) passed on the preceding code head `02580cf7a7db40d6f6f0b0d1613fa238d79b959f`: `npm ci`, `npm audit --audit-level=moderate`, `npm test`, deployment-checker syntax, frontend build, Playwright Chromium E2E, and Docker build. Current local Node 22.23.3 checks pass 43 tests, the audit (zero vulnerabilities), and frontend build. GitHub CI for the additional origin-validation change is pending push. Local Playwright could not launch because `libnspr4.so` is absent; local Docker build was denied by Docker socket permissions. Staging/provider, production-configuration, backup/restore, and legal/privacy checks remain outside this CI evidence. See [the consolidated production readiness report](PRODUCTION-READINESS-REPORT.md) for current results and release steps.
 
 ## Release recommendation
 
@@ -14,6 +14,8 @@
 **Confirmed at the public HTTP boundary:** a request carrying the public site Origin is rejected before it can receive the asset, while the homepage is served. The repository's CORS middleware is an exact code path capable of returning this response. **Most likely cause:** the live process allowlist does not contain the canonical browser origin. The exact running image, configuration, and middleware version have not been inspected, so attributing the live response to that precise deployed code remains a high-confidence hypothesis rather than direct host-level proof. Asset hash/build mismatch is not indicated by this response pattern but has not been ruled out by comparing the running image.
 
 **Safe repair:** configure `ALLOWED_ORIGINS` with the exact canonical public origins actually used by the site, preserving any other intentionally supported origins; do not use `*`. This is a live production configuration change and has not been made. After the owner approves the configuration update and restart, rerun the origin-bearing public asset/API checks and load the site in a browser. The deployment checker now sends the page origin with asset and health requests so CI/operations checks detect this failure.
+
+**Additional code safeguard:** `server/origins.js` now rejects malformed/noncanonical allowlist entries and, in production, non-HTTPS or loopback origins. Startup also fails when `APP_BASE_URL`'s origin is missing from the exact allowlist. `tests/origins.test.js` covers these conditions. This detects configuration drift before startup but does not alter or prove the live host settings.
 
 **Hosting identity remains unverified:** public headers show Caddy forwarding to Express, but Docker API access is denied from this audit environment, so the live container image, bind mount, and deployed build SHA could not be compared with the branch.
 
@@ -119,8 +121,9 @@ These cannot be conclusively determined from source alone:
 
 ## Release checklist
 
-### Implemented in draft PR #10; automated CI passed on the code commit
+### Implemented in draft PR #10; CI evidence is recorded above
 - Fail-closed `NODE_ENV`/`APP_ENV` consistency validation.
+- Canonical HTTPS origin parsing and startup check that the `APP_BASE_URL` origin is present in `ALLOWED_ORIGINS`.
 - Resumable Plaid transaction pagination with cursor persistence, replay, partial-failure, and database-reopen tests.
 - Production HttpOnly cookie sessions, CSRF proof, logout/reset revocation, and SQLite-backed single-instance rate limits.
 - Route validation improvements, Stripe webhook idempotency/order protection, versioned baseline migrations, safe error logging, and same-origin deployment checks.
@@ -130,6 +133,6 @@ These cannot be conclusively determined from source alone:
 2. Validate staging with synthetic users and provider test modes, including browser login/recovery/dashboard, Google/Plaid compatibility, Stripe checkout/webhook/cancellation, and SMTP delivery.
 3. Complete a sanitized production-like migration upgrade and a scheduled encrypted off-host backup/restore drill; verify retention, alerts, RPO/RTO, and rollback.
 4. Decide financial source-of-truth rules, money precision migration, transfer/refund/pending semantics, and bank-balance freshness; add calculation tests after the rules are agreed.
-5. Browser E2E tests for built asset MIME/status, signup screen/splash, login/dashboard initialization, and generic password recovery passed in CI run #254. Staging provider flows, accessibility, responsive behavior, and real-device checks remain open.
+5. Browser E2E tests for built asset MIME/status, signup screen/splash, login/dashboard initialization, and generic password recovery passed in CI run #258 on the preceding code head. GitHub CI for the latest origin-validation change must pass after push; staging provider flows, accessibility, responsive behavior, and real-device checks remain open.
 6. Complete independent security review and qualified legal/privacy review; finalize support, deletion/retention, and incident-response ownership.
 7. Keep PR #10 and PR #1 unmerged and production unchanged until the release gates have evidence and the release owner approves deployment.

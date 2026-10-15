@@ -103,7 +103,7 @@ The production API currently refuses to start unless Stripe is configured and th
   - `STRIPE_WEBHOOK_SECRET`
   - `STRIPE_PRICE_MONTHLY`
   - `STRIPE_PRICE_ANNUAL`
-- [ ] Set `APP_BASE_URL` to the public HTTPS origin.
+- [ ] Set `APP_BASE_URL` to the canonical public HTTPS origin and include that exact origin in `ALLOWED_ORIGINS`.
 - [ ] Use Stripe test mode first. Test monthly and annual checkout, verified webhook activation, webhook retries/out-of-order events, cancellation, payment failure, portal management, duplicate checkout attempts, and account deletion with an active subscription.
 - [ ] Confirm customer support contact, refund/cancellation terms, renewal disclosures, tax handling, receipts, and dispute procedures. Obtain legal review before charging customers.
 - [ ] Switch to live credentials only after the test checklist passes and the business is ready to support paid users. Never mix test Price IDs with live Stripe keys.

@@ -8,6 +8,7 @@ import { OAuth2Client } from 'google-auth-library'
 import { Configuration, PlaidApi, PlaidEnvironments, Products } from 'plaid'
 import Database from 'better-sqlite3'
 import { createPlaidSync } from './plaid-sync.js'
+import { assertAppBaseOriginAllowed, parseAllowedOrigins } from './origins.js'
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
 import { createRateLimiter } from './rate-limit.js'
 import { getSafeErrorCode } from './safe-logging.js'
@@ -296,10 +297,8 @@ const publicLegalPages = {
   },
 }
 
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://localhost:3003,http://localhost:4173').split(',').map((origin) => origin.trim()).filter(Boolean)
-if (isProduction && allowedOrigins.some((origin) => origin.includes('localhost'))) {
-  throw new Error('Production ALLOWED_ORIGINS cannot include localhost.')
-}
+const allowedOrigins = parseAllowedOrigins(process.env.ALLOWED_ORIGINS, { production: isProduction })
+if (isProduction) assertAppBaseOriginAllowed(appBaseUrl, allowedOrigins)
 
 const configuredTrustProxy = process.env.TRUST_PROXY_HOPS
 if (configuredTrustProxy === undefined && isProduction) {
