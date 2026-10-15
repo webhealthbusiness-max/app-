@@ -74,12 +74,10 @@
 
 **Fix:** before promising timely bank data, use a durable worker/scheduler or provider webhooks plus reconciled periodic jobs; bound concurrency, add backoff/jitter and stale-sync alerts, and expose last-success/error status.
 
-### 10. Database migrations are ad hoc startup mutations
-**Evidence:** server/index.js creates tables and runs conditional ALTER TABLE statements at process startup.
+### 10. Database migration management
+**Evidence:** the previous startup path ran schema changes directly and had no migration history.
 
-**Failure mode:** migration history, rollback, backup compatibility, and multi-process coordination are not formalized. A future schema change may fail partway or behave differently across deployed copies.
-
-**Fix:** add numbered transactional migrations with a schema-version table; test upgrade from prior schema copies and rollback/restore; enforce a single migration runner before app startup.
+**Status: BASELINE MIGRATION FRAMEWORK IMPLEMENTED, CI PENDING.** `server/migrations.js` records ordered schema versions and applies the existing baseline/legacy upgrades in one SQLite transaction. Regression tests cover upgrading a legacy schema while preserving synthetic user data, idempotent restart, and refusing a newer schema version. This framework does not define destructive down migrations; rollback must use the documented backup/restore process. Test it against a production-like sanitized copy and ensure only one app instance runs migrations before release.
 
 ### 11. Deployment settings and filesystem protections need verification
 **Evidence:** SQLite is single-instance; database path is environment-defined; reverse-proxy trust is configurable. Repository review cannot verify actual IONOS permissions, durable storage, firewall, DNS, TLS, or publish directory.
@@ -125,6 +123,6 @@ These cannot be conclusively determined from source alone:
 2. Fix/resume Plaid pagination safely and add >10-page tests.
 3. Add rate-limit and field-validation tests; replace or formally constrain process-local limits.
 4. Design XSS/session/CSP changes with threat-model tests.
-5. Add schema migration/versioning.
+5. Validate migrations against a production-like sanitized copy and finalize the rollback-by-restore procedure.
 6. Reconcile documentation and add browser/staging test plans.
 7. Do not claim release readiness until staging, provider, backup/restore, and legal/privacy gates have evidence.
