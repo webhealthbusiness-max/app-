@@ -95,7 +95,7 @@ test('task completion update enforces ownership in the write query', async () =>
   assert.notEqual(routeStart, -1, 'task toggle route must exist')
   const routeEnd = source.indexOf('\napp.', routeStart + 1)
   const route = source.slice(routeStart, routeEnd === -1 ? source.length : routeEnd)
-  assert.match(route, /UPDATE tasks SET completed = \? WHERE id = \? AND user_id = \?/, 'task update must be scoped to the authenticated owner')
+  assert.match(route, /UPDATE tasks SET completed = CASE completed WHEN 0 THEN 1 ELSE 0 END WHERE id = \? AND user_id = \?/, 'atomic task toggle must be scoped to the authenticated owner')
 })
 
 
@@ -129,6 +129,12 @@ test('staging and production APP_ENV values require NODE_ENV=production', () => 
   const result = runWithProductionEnv({ NODE_ENV: 'development', APP_ENV: 'production' })
   assert.notEqual(result.status, 0, 'production APP_ENV must not run with development NODE_ENV')
   assert.match(result.stderr, /APP_ENV=staging or production requires NODE_ENV=production/)
+})
+
+test('unknown NODE_ENV values fail closed instead of falling back to development safeguards', () => {
+  const result = runWithProductionEnv({ NODE_ENV: 'Production', APP_ENV: 'development' })
+  assert.notEqual(result.status, 0, 'an unrecognized NODE_ENV must not start the app with development settings')
+  assert.match(result.stderr, /NODE_ENV must be development, test, or production/)
 })
 
 test('Plaid sync uses a bounded batch and commits its latest page cursor', async () => {

@@ -1,6 +1,6 @@
 # Grounded API route access matrix
 
-Review basis: `server/index.js` on the `ci-smoke-tests` branch, current automated tests, and source inspection. This is an implementation review, not a penetration test or external security certification. Route owners should update this matrix whenever a route is added or its authorization logic changes.
+Review basis: source and tests on the `codex/comprehensive-remediation` branch. This is an implementation review, not a penetration test or external security certification. Route owners should update this matrix whenever a route is added or its authorization logic changes.
 
 ## Public routes (no user bearer token by design)
 
@@ -10,16 +10,17 @@ Review basis: `server/index.js` on the `ci-smoke-tests` branch, current automate
 | `POST /api/auth/verify-email` | Public; accepts only a hashed, unexpired verification token; token is single-use. |
 | `POST /api/auth/resend-verification` | Public; rate-limited; generic response avoids revealing account existence. |
 | `POST /api/auth/password-reset/request` | Public; rate-limited; generic response avoids revealing account existence. |
-| `POST /api/auth/password-reset/complete` | Public; requires an unexpired single-use reset token and password validation; increments session version to revoke existing bearer sessions. |
+| `POST /api/auth/password-reset/complete` | Public; requires an unexpired single-use reset token and password validation; increments session version to revoke existing sessions. |
 | `POST /api/auth/login` | Public; rate-limited; checks password and email verification in production. |
 | `POST /api/auth/google` | Public; rate-limited; verifies Google ID token against configured audience and requires Google's verified-email claim. |
-| `POST /api/billing/webhook` | Public provider callback; validates Stripe signature against the exact raw body and checks billing identifiers for cross-user conflicts before persistence. |
+| `POST /api/auth/logout` | Public endpoint that revokes a valid session version when supplied and clears production session/CSRF cookies; cookie-authenticated calls require CSRF proof. |
+| `POST /api/billing/webhook` | Public provider callback; validates Stripe signature against the exact raw body, deduplicates event IDs, ignores stale subscription events, and checks billing identifiers for cross-user conflicts before persistence. |
 | `GET /privacy`, `GET /terms`, `GET /copyright` | Public static legal pages; content still needs legal review. |
 | `GET /health`, `GET /api/health` | Public health checks; do not include credentials or financial records in output. |
 
 ## Authenticated routes
 
-These routes must use `withUser`; the authenticated user ID is derived from the verified bearer token, never from a client-supplied user ID.
+These routes must use `withUser`; production derives identity from a verified HttpOnly session cookie, while bearer tokens remain supported only in non-production. Never accept a client-supplied owner ID.
 
 | Route group | Routes | Required authorization |
 | --- | --- | --- |
@@ -45,5 +46,5 @@ These routes must use `withUser`; the authenticated user ID is derived from the 
 - Implemented on this branch: encrypted SQLite backup and non-destructive restore utilities, with a synthetic-database CI round-trip test.
 - Integration coverage now exercises email verification enforcement, single-use verification/reset tokens, password-reset session revocation, wrong-key/tampered-backup rejection, and cross-user isolation for dashboard finance collections, direct list routes, task mutation, and notification mutation. Existing tests cover export/deletion, billing webhooks, provider-disabled behavior, and Stripe ownership conflicts.
 - Remaining validation: test Plaid-backed cross-user flows with provider-supported synthetic fixtures, run SMTP-backed delivery tests in staging, run the container against a real persistent volume, and complete an off-host staging restore drill.
-- Operational risk: rate limits and scheduled Plaid syncing are process-local, so the current architecture is single-instance only. Keep a single API instance with durable storage until rate limiting, jobs, and database architecture are upgraded.
+- Operational risk: rate-limit buckets persist in SQLite and are appropriate only for the documented single-host/single-instance design; scheduled Plaid syncing remains process-local. Keep one API instance with durable storage until a shared database/rate limiter and durable job system are introduced.
 - Do not accept real financial data until staging evidence, independent security review, backup restore drill, provider approvals, and production deployment gates are complete.

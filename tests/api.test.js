@@ -166,6 +166,37 @@ test('auth, finance data isolation, validation, export, and deletion', async (t)
   assert.equal(dashboardWithAccount.accounts.length, 1)
   assert.equal(dashboardWithAccount.accounts[0].balance, 1250.5)
 
+  const excessPrecisionBalance = await fetch(`${baseUrl}/api/accounts`, {
+    method: 'POST',
+    headers: firstHeaders,
+    body: JSON.stringify({ name: 'Invalid precision account', type: 'Checking', balance: '10.001' }),
+  })
+  assert.equal(excessPrecisionBalance.status, 400)
+  const invalidGoalDate = await fetch(`${baseUrl}/api/goals`, {
+    method: 'POST',
+    headers: firstHeaders,
+    body: JSON.stringify({ name: 'Invalid date goal', target: '500.00', date: '2025-02-29' }),
+  })
+  assert.equal(invalidGoalDate.status, 400)
+  const invalidBillFrequency = await fetch(`${baseUrl}/api/bills`, {
+    method: 'POST',
+    headers: firstHeaders,
+    body: JSON.stringify({ name: 'Invalid frequency bill', amount: '25.00', frequency: 'Daily', dueDate: '2026-10-31', category: 'Utilities' }),
+  })
+  assert.equal(invalidBillFrequency.status, 400)
+  const invalidIncomeFlags = await fetch(`${baseUrl}/api/income`, {
+    method: 'POST',
+    headers: firstHeaders,
+    body: JSON.stringify({ source: 'Synthetic employer', amount: '1000.00', frequency: 'Monthly', nextDate: '2026-11-01', isVariable: 'false' }),
+  })
+  assert.equal(invalidIncomeFlags.status, 400)
+  const invalidSubscriptionStatus = await fetch(`${baseUrl}/api/subscriptions`, {
+    method: 'POST',
+    headers: firstHeaders,
+    body: JSON.stringify({ merchant: 'Synthetic service', amount: '9.99', frequency: 'Monthly', nextDate: '2026-11-01', status: 'Arbitrary' }),
+  })
+  assert.equal(invalidSubscriptionStatus.status, 400)
+
   const signupNotificationsResponse = await fetch(`${baseUrl}/api/notifications`, { headers: firstHeaders })
   const signupNotifications = await signupNotificationsResponse.json()
   assert.equal(signupNotificationsResponse.status, 200)

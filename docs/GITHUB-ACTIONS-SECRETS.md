@@ -1,6 +1,6 @@
 # Grounded GitHub Actions Secrets Setup
 
-Grounded currently uses GitHub Actions for CI and is not deployed to a hosting provider. The normal CI workflow (install, audit, tests, build) should not need Plaid or Stripe credentials.
+The public Grounded site is live, but no evidence here shows that GitHub Actions deploys it or that production uses this repository's current branch. The current workflow is CI-only (install, audit, tests, build, and container build) and should not need Plaid or Stripe credentials. Do not add live provider secrets to pull-request workflows.
 
 ## Security rules
 

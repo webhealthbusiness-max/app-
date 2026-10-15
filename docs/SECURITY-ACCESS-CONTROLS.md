@@ -4,7 +4,7 @@ This is a launch-blocker review checklist, not a claim of independent penetratio
 
 ## Existing protections observed in the API
 
-- Most private API routes use bearer-token authentication middleware.
+- Private API routes use `withUser`; production identity comes from a verified HttpOnly session cookie, while bearer-token compatibility is restricted to non-production.
 - Core finance records are associated with a user ID; read/write queries should include the authenticated user's ID.
 - API responses use `Cache-Control: no-store` and security headers.
 - Plaid access tokens are encrypted at rest using AES-256-GCM and a separately configured key.
@@ -21,7 +21,7 @@ For every endpoint that reads, creates, changes, exports, syncs, or deletes data
 - [ ] Bank Link token creation, public-token exchange, sync, disconnect, and Item deletion enforce ownership for every request.
 - [ ] Plaid access tokens, public tokens, full bank payloads, account numbers, and sensitive finance data never appear in logs, API errors, analytics, URLs, or frontend bundles.
 - [ ] Stripe checkout/portal routes derive the customer and subscription from the authenticated user's server-side billing record; user-supplied customer IDs are not trusted.
-- [ ] Webhook signature verification uses the exact raw request body and rejects missing/invalid signatures; event handling is idempotent and safe for retries/out-of-order delivery.
+- [x] Stripe webhook signature verification uses the exact raw request body and rejects missing/invalid signatures; event IDs are recorded for replay deduplication, and subscription events with older provider timestamps are ignored.
 - [ ] Export and account deletion cover all relevant data tables, queued emails, tokens, provider connections, and documented retention/backups.
 - [ ] Authentication routes have bounded input sizes, rate limits, generic responses for recovery requests, expiring one-time tokens, and no user-enumeration side channel.
 - [ ] CORS allows only explicit trusted origins; proxy trust is limited to known infrastructure; authenticated responses are not cached by CDN.
@@ -42,4 +42,4 @@ Create at least two synthetic users, Alice and Bob. Seed each with unique accoun
 
 ## Known architecture limits
 
-SQLite and in-memory rate limits are currently single-instance oriented. The app still needs a durable database/volume, encrypted off-host backup scheduling, a completed restore drill, staging validation of email verification/password recovery, and a production hosting plan before launch. This checklist does not substitute for legal, privacy, compliance, or independent security review.
+SQLite-backed rate limits and the app database are single-host/single-instance oriented. Production sessions now use HttpOnly/Secure/SameSite cookies with HMAC-backed CSRF proof; the short-lived bearer compatibility path is restricted to non-production. The app still needs proof of durable storage, encrypted off-host backup scheduling, a completed restore drill, staging validation of email verification/password recovery and Google/Plaid flows, trusted proxy configuration, and an independent security review before launch. This checklist does not substitute for legal, privacy, compliance, or independent security review.

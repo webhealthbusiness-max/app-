@@ -1,19 +1,28 @@
 # Grounded production audit findings
 
-**Scope:** static review of the ci-smoke-tests branch. This is not a penetration test, a verified live-site probe, or a legal/compliance opinion. Follow-up fixes are committed on this branch for findings 1 and 2, task field bounds under finding 13, the CSP report-only baseline, deployment asset MIME-type diagnostics, and a manual CI trigger. GitHub Actions run #219 passed for commit `2cc62a2362a9eadfe47ed1230e3f545fd2ff4e86`, including `npm ci`, `npm audit --audit-level=moderate`, `npm test`, deployment-checker syntax validation, frontend build, and Docker build. Other items below remain open unless explicitly marked otherwise.
+**Scope:** source review of `origin/ci-smoke-tests` plus focused remediation work on the uncommitted `codex/comprehensive-remediation` branch. This is not a penetration test or legal/compliance opinion. The public CORS failure is confirmed by read-only HTTP probes. Remediation changes are not committed and have not run in GitHub CI. Local tests requiring installed dependencies, the frontend build, dependency audit, and Docker build remain unverified because this environment lacks npm and native build tools; pure Node tests and syntax checks are listed in the completion report.
 
 ## Release recommendation
 
 **Do not accept real financial data or enable Plaid/Stripe live mode yet.** Keep PR #1 unmerged until high-priority code and operational blockers are addressed, tests pass, and staging is exercised.
 
+## P0 — confirmed live-site release blocker
+
+### Browser asset requests are rejected by the application's Origin check
+**Evidence (read-only public requests, 2026-10-15):** the production homepage returns HTTP 200 through Caddy and references `/assets/index-uyI3Hzpm.js` and `/assets/index-CnYiRr1h.css`. Each asset returns HTTP 200 with its expected JavaScript/CSS MIME type when requested without an `Origin` header, but HTTP 403 `application/json` when requested with `Origin: https://www.mygroundedfinance.online` or `Origin: https://mygroundedfinance.online`. `/health` and `/api/health` show the same origin-dependent behavior. Responses identify Caddy as the proxy and Express as the application (`X-Powered-By`), matching `server/index.js` CORS middleware at lines 323–369 and its 403 handler at lines 1797–1798.
+
+**Confirmed cause:** the running application's CORS middleware rejects both public site origins. The exact configured allowlist was not read or printed. The app's static asset URLs reach Express CORS middleware, which rejects the browser's origin before static-file serving. Originless VPS requests therefore conceal the problem.
+
+**Safe repair:** configure `ALLOWED_ORIGINS` with the exact canonical public origins actually used by the site, preserving any other intentionally supported origins; do not use `*`. This is a live production configuration change and has not been made. After the owner approves the configuration update and restart, rerun the origin-bearing public asset/API checks and load the site in a browser. The deployment checker now sends the page origin with asset and health requests so CI/operations checks detect this failure.
+
+**Hosting identity remains unverified:** public headers show Caddy forwarding to Express, but Docker API access is denied from this audit environment, so the live container image, bind mount, and deployed build SHA could not be compared with the branch.
+
 ## P1 — fix before production
 
-### 1. Production hardening depends on NODE_ENV, not APP_ENV alone
-**Evidence:** server/index.js derives isProduction only from NODE_ENV === 'production', while APP_ENV independently accepts staging or production. JWT fallback, email-verification enforcement, provider-mode checks, and required production settings depend on isProduction.
+### 1. Production environment consistency
+**Evidence:** safeguards depend on `NODE_ENV=production`; `APP_ENV=staging|production` is rejected unless `NODE_ENV=production`.
 
-**Failure mode:** if a host is misconfigured with APP_ENV=production but NODE_ENV is missing/incorrect, startup guards can be skipped and the development JWT fallback can be used. This is a fail-open configuration path even though the documented Dockerfile sets both values.
-
-**Status: FIX COMMITTED on ci-smoke-tests; CI passed for commit 3bc9fc88fee878ae8006f99b8f78bab086b41428.** Startup now rejects APP_ENV=staging/production unless NODE_ENV=production, with a regression test for the production/development mismatch. Further startup configuration combinations should still be covered.
+**Status: FIX IMPLEMENTED, UNCOMMITTED.** Startup also rejects unknown `NODE_ENV` values so a typo such as `Production` cannot silently select development defaults. Regression tests cover the mismatch and invalid value, but server startup tests have not run locally because dependencies are unavailable. CI verification remains required.
 
 ### 2. Plaid sync can get stuck after more than 5,000 changes
 **Evidence:** syncPlaidConnection in server/index.js stops after 10 pages of 500 transactions. When hasMore remains true, it stores the original connection.cursor instead of the last processed cursor.
@@ -22,19 +31,17 @@
 
 **Status: FIX AND REGRESSION COVERAGE COMMITTED.** The sync persists the latest processed cursor atomically with transaction changes, so a bounded run continues from the saved cursor. `tests/plaid-sync.integration.test.js` uses synthetic provider data and SQLite to verify a 12-page sync across a database close/reopen boundary, duplicate transaction replay, added/modified/removed changes, and a provider failure on page 2 followed by a safe retry. On failure, neither the fetched page changes nor the cursor advance is committed. `tests/plaid-sync.test.js` also covers the 11-page bounded-resume behavior. GitHub Actions run #219 passed `npm test` for commit `2cc62a2362a9eadfe47ed1230e3f545fd2ff4e86`. The restart test closes/reopens SQLite and reconstructs the sync service in one test process; it is not a process-supervisor or deployed-container restart test.
 
-### 3. Browser bearer token is stored in localStorage
-**Evidence:** src/App.tsx reads/writes grounded-token in localStorage; that JWT authorizes finance-data API requests.
+### 3. Browser session token exposure
+**Evidence:** the previous frontend stored the production bearer JWT in localStorage, where script injection could read it.
 
-**Failure mode:** successful script injection or a compromised third-party script can read and exfiltrate a reusable bearer token. The app loads Google/Plaid browser scripts. A `Content-Security-Policy-Report-Only` baseline is now present but does not block script execution or centrally collect violations.
-
-**Fix:** review a migration to Secure, HttpOnly, SameSite cookies with CSRF protection and session rotation/revocation, or explicitly document why bearer tokens are retained and implement a strict XSS defense strategy. Add a carefully tested CSP compatible with Vite, Google Identity Services, Plaid Link, fonts, and API origins. Avoid unsafe-inline/eval unless justified. Audit user-text rendering and add browser security tests. Do not blindly switch to cookies without CSRF design.
+**Status: FIX IMPLEMENTED, UNCOMMITTED.** Production now issues Secure, HttpOnly, SameSite session cookies, signed CSRF tokens, revokes sessions on logout, and no longer returns JWTs in JSON. The frontend uses cookies in production and sessionStorage only in non-production. Unit and synthetic production integration tests were added; only the pure cookie unit tests ran locally. Browser E2E, CI, and staging compatibility with Google and Plaid remain unverified. CSP remains report-only and does not block script execution.
 
 ### 4. In-memory rate limits are not a production abuse-control system
-**Evidence:** requestBuckets is a process-local Map; authentication/recovery limits are keyed by client IP. The production runbook itself notes these limits do not coordinate across processes or survive restarts.
+**Evidence:** the previous implementation used a process-local Map keyed by IP, which reset on restart and lacked per-account limits.
 
 **Failure mode:** restarts/replicas bypass limits; distributed attackers can spray password-reset/verification emails; users behind one shared IP can block each other; stale map entries are cleaned only when the map reaches its bucket cap.
 
-**Fix:** use shared storage; for one host a durable database may be sufficient, while scaling usually needs Redis/equivalent. Combine IP/network and normalized account/email keys without revealing account existence, bound key cardinality, set route-specific limits for signup/login/Google/recovery/bank sync/checkout/portal, and test proxy IP handling and 429 behavior.
+**Status: SINGLE-HOST FIX IMPLEMENTED, UNCOMMITTED.** Rate-limit buckets persist in SQLite across app restarts, are HMAC-keyed rather than storing raw emails/IPs, bound key cardinality, and apply account/user keys alongside IP keys on signup, login, recovery, banking, and billing routes. Database-backed tests were added but could not run locally without `better-sqlite3`. **Still required:** verify proxy IP trust and 429 behavior in staging. SQLite rate limits are only appropriate for a single-host/single-instance model; multi-host deployments require shared storage.
 
 ### 5. Production privacy/legal documents are not ready
 **Evidence:** server/index.js labels the privacy page a pre-launch disclosure and says production retention, backup-erasure policy, and independent privacy review are missing. Terms are explicitly drafts. README-PRODUCTION.md lists counsel review and retention/deletion review as outstanding.
@@ -53,7 +60,7 @@
 ### 7. CI does not prove production is healthy
 **Evidence:** CI performs install, audit, Node tests, Vite build, and Docker build. It does not verify IONOS reverse proxy rules, SMTP delivery, external provider webhooks, or a staging restore drill.
 
-**Status: PARTIAL FIX COMMITTED.** The credential-free CI workflow can now be manually dispatched, and the public deployment checker detects failed asset requests plus incorrect JavaScript/CSS content types that can indicate an SPA fallback or host MIME rule. **Still required:** run the latest CI, execute the checker from a network that can reach the public domain, add a staging-only smoke/E2E workflow using synthetic data and test credentials, and verify `/api/health`, auth flows, and cache headers. Never expose live provider secrets to untrusted PR jobs.
+**Status: PARTIAL FIX COMMITTED.** The credential-free CI workflow can be manually dispatched. The deployment checker detects failed assets, incorrect JavaScript/CSS content types, and same-origin CORS rejection for assets and `/api/health`. It has now reproduced the current live CORS failure in read-only checks. **Still required:** configure the exact production allowlist with owner approval, run the checker after the change, add staging browser E2E using synthetic data and test credentials, and verify auth flows and cache headers. Never expose live provider secrets to untrusted PR jobs.
 
 ### 8. Backup scripts are not a backup service
 **Evidence:** npm run backup creates an encrypted backup file but does not schedule it, transfer backups off-host, enforce retention, alert on failure/staleness, or prove a restore against the deployed volume.
@@ -89,7 +96,7 @@
 ### 13. Validate financial/date fields consistently
 **Evidence:** create routes sanitize strings but have inconsistent length bounds, enum validation, and date validation. Goals accept sanitized date/contribution strings without validating date format; task title/category/due strings lack maximum lengths; bill/income/subscription routes need consistent enum/range validation.
 
-**Status: PARTIAL FIX COMMITTED on ci-smoke-tests; CI passed for commit 3bc9fc88fee878ae8006f99b8f78bab086b41428.** Task title/category/due text fields now have maximum lengths and a regression test. Remaining routes still need centralized schema validation, real date and enum validation, numeric precision/range tests, and a documented money precision strategy.
+**Status: PARTIAL FIX IMPLEMENTED, UNCOMMITTED.** Shared validators now enforce cents precision, maximum values, calendar dates, frequency/status enums, and boolean types on account, goal, bill, income, and subscription creation. The bill/income/subscription forms use constrained frequency and date inputs. Route regression tests were added; the API suite and frontend type/build check have not run locally. Money remains stored as SQLite `REAL`, so an integer-cents migration and finance domain rules remain open.
 
 ### 14. Finance calculations need explicit domain rules and tests
 **Evidence:** dashboard safeToSpend/projectedBalance use profile arithmetic; manually entered transactions update current_money, while Plaid imports store transaction rows and connected-account balances separately. This may be intentional but the source-of-truth distinction needs tests.
@@ -105,7 +112,8 @@
 
 These cannot be conclusively determined from source alone:
 - Whether public HTML references built assets or the Vite source entry.
-- Exact status of each production JS/CSS asset and whether IONOS permissions/rewrite/proxy rules cause the reported loading failure.
+- Whether the exact-origin production CORS allowlist repair has been applied and the app loads successfully in a real browser.
+- Live container image/build identity, durable volume, and actual Caddy configuration (public Caddy-to-Express routing is confirmed from response headers, but Docker inspection was denied).
 - DNS, certificate chain, TLS, firewall, SSH, and actual volume persistence.
 - SMTP deliverability/domain authentication, Stripe test checkout/webhook lifecycle, Plaid Sandbox/OAuth redirect behavior.
 - Off-host backup upload, key recovery, restore time, and deletion propagation through backups/providers.
