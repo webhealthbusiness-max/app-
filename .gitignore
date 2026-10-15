@@ -9,3 +9,7 @@ data/*.db
 # Encrypted backups and restore artifacts must never be committed.
 backups/
 *.sqlite.enc
+
+# Browser test artifacts are local diagnostics and must not be committed.
+test-results/
+playwright-report/

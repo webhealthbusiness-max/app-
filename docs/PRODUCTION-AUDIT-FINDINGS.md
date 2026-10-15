@@ -130,6 +130,6 @@ These cannot be conclusively determined from source alone:
 2. Validate staging with synthetic users and provider test modes, including browser login/recovery/dashboard, Google/Plaid compatibility, Stripe checkout/webhook/cancellation, and SMTP delivery.
 3. Complete a sanitized production-like migration upgrade and a scheduled encrypted off-host backup/restore drill; verify retention, alerts, RPO/RTO, and rollback.
 4. Decide financial source-of-truth rules, money precision migration, transfer/refund/pending semantics, and bank-balance freshness; add calculation tests after the rules are agreed.
-5. Add and run browser E2E/accessibility/responsive checks; current CI does not launch a browser.
+5. Browser E2E tests have been added for built asset MIME/status, signup screen/splash, login/dashboard initialization, and generic password recovery. CI must pass the new browser job; staging provider flows, accessibility, responsive behavior, and real-device checks remain open.
 6. Complete independent security review and qualified legal/privacy review; finalize support, deletion/retention, and incident-response ownership.
 7. Keep PR #10 and PR #1 unmerged and production unchanged until the release gates have evidence and the release owner approves deployment.
