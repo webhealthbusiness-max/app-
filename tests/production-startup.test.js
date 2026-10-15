@@ -131,16 +131,15 @@ test('staging and production APP_ENV values require NODE_ENV=production', () => 
   assert.match(result.stderr, /APP_ENV=staging or production requires NODE_ENV=production/)
 })
 
-test('Plaid sync persists the latest processed cursor when more pages remain', async () => {
+test('Plaid sync uses a bounded batch and commits its latest page cursor', async () => {
   const { readFile } = await import('node:fs/promises')
-  const source = await readFile(serverPath, 'utf8')
+  const source = await readFile(new URL('../server/plaid-sync.js', import.meta.url), 'utf8')
   const syncStart = source.indexOf('const syncPlaidConnection =')
-  const syncEnd = source.indexOf('\nconst bankSyncTimer', syncStart)
   assert.notEqual(syncStart, -1, 'Plaid sync function must exist')
-  const sync = source.slice(syncStart, syncEnd)
-  assert.match(sync, /while \(hasMore && pageCount < 10\)/, 'sync must bound one run')
-  assert.match(sync, /\.run\(cursor, connection\.item_id, connection\.user_id\)/, 'sync must save the latest processed cursor even when another batch remains')
-  assert.doesNotMatch(sync, /\.run\(hasMore \? connection\.cursor : cursor/, 'sync must not retain the old cursor when more pages remain')
+  const sync = source.slice(syncStart)
+  assert.match(sync, /while \(hasMore && pageCount < 10\)/, 'a sync run must have a bounded page count')
+  assert.match(sync, /SET cursor = \?, status = 'connected'[\s\S]*\.run\(cursor, connection\.item_id, connection\.user_id\)/, 'the cursor must be committed with transaction changes')
+  assert.doesNotMatch(sync, /\.run\(hasMore \? connection\.cursor : cursor/, 'a partial batch must not retain the old cursor')
 })
 
 test('task creation bounds every user-controlled text field', async () => {
