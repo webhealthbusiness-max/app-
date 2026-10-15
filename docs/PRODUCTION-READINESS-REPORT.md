@@ -3,7 +3,7 @@
 **Audit date:** 2026-10-15  
 **Repository:** `webhealthbusiness-max/app-`  
 **Reviewed branch:** `codex/comprehensive-remediation`  
-**Reviewed code revision:** [`c9f94835531978b151310d372110e572bcb9980e`](https://github.com/webhealthbusiness-max/app-/commit/c9f94835531978b151310d372110e572bcb9980e)
+**Reviewed code revision:** [`1a5e402d162ba2ef7d676cf0d0cf7e545616084e`](https://github.com/webhealthbusiness-max/app-/commit/1a5e402d162ba2ef7d676cf0d0cf7e545616084e)
 **Pull request:** [#10](https://github.com/webhealthbusiness-max/app-/pull/10), draft, open, unmerged; based on PR #1's `ci-smoke-tests` branch.  
 **Scope limit:** source, tests, GitHub history, and anonymous public HTTP requests. This is not a penetration test, legal opinion, provider certification, staging acceptance, or verification of the live container configuration. No production configuration, service, database, or financial data was changed.
 
@@ -24,7 +24,7 @@ An anonymous GET probe was run against `https://www.mygroundedfinance.online` on
 | `/assets/index-CnYiRr1h.css` | 403 `application/json` | 200 `text/css` |
 | `/api/health` | 403 `application/json` | 200 `application/json` |
 
-The 403 responses include `X-Powered-By: Express` and JSON content type. The repository's exact CORS path is `server/index.js:299-302,342-350`; rejected origins are mapped to HTTP 403 at `server/index.js:1656-1659`. Static files are served by Express from `dist/` at `server/index.js:1635-1653`. This confirms an Origin-dependent rejection at the public application response boundary and reproduces the asset failure. It does not by itself prove which deployed process or configuration generated the response.
+The 403 responses include `X-Powered-By: Express` and JSON content type. The repository parses the exact allowlist and checks `APP_BASE_URL` at `server/index.js:147-148`; CORS rejects other origins at `server/index.js:340-349`, and the error handler maps that rejection to HTTP 403 at `server/index.js:1654-1657`. Static files are served by Express from `dist/` at `server/index.js:1633-1651`. This confirms an Origin-dependent rejection at the public application response boundary and reproduces the asset failure. It does not by itself prove which deployed process or configuration generated the response.
 
 The automated `npm run check:deployment -- https://www.mygroundedfinance.online` probe returned homepage 200 but 403 for all six referenced assets and `/api/health`, then exited 1. This is a **failed production check**, not evidence of a repair.
 
@@ -64,8 +64,8 @@ If the allowlist check is false and direct app requests reproduce the same 403, 
 
 | Severity | Finding and code location | Status / evidence | Remaining action |
 | --- | --- | --- | --- |
-| **P0 release blocker** | Live Origin-dependent 403; `server/index.js:299-302,342-350,1656-1659` | Reproduced by public GET and deployment checker; likely exact allowlist mismatch, but live config/image unavailable. | Prove runtime allowlist and image on IONOS; update exact origin only after approval; validate browser and checker. |
-| **P1, fixed in this continuation** | Production could start with an `APP_BASE_URL` host that is absent from `ALLOWED_ORIGINS`, causing generated email/payment return links to target an origin that credentialed API calls reject. `server/origins.js`; startup integration in `server/index.js:299-301`. | New tests verify canonical origins, reject paths/invalid and insecure production origins, and require the app base origin to be allowed. Local full suite passes. This prevents inconsistent configuration but does not prove or change the live allowlist. | Set matching exact HTTPS values in the host configuration, then restart only through an approved release plan and verify the public site. |
+| **P0 release blocker** | Live Origin-dependent 403; `server/index.js:147-148,340-349,1654-1657` | Reproduced by public GET and deployment checker; likely exact allowlist mismatch, but live config/image unavailable. | Prove runtime allowlist and image on IONOS; update exact origin only after approval; validate browser and checker. |
+| **P1, fixed in this continuation** | Production could start with an `APP_BASE_URL` host that is absent from `ALLOWED_ORIGINS`, causing generated email/payment return links to target an origin that credentialed API calls reject. `server/origins.js`; startup integration in `server/index.js:147-148`, before SQLite opens at `154-160`. | Tests verify canonical origins, reject paths/invalid and insecure production origins, require the app base origin to be allowed, and confirm mismatch rejection occurs before creating/opening SQLite. Full local suite and GitHub CI pass. This prevents inconsistent configuration but does not prove or change the live allowlist. | Set matching exact HTTPS values in host configuration, then restart only through an approved release plan and verify the public site. |
 | **P1, fixed in PR #10** | Production safeguards previously depended on inconsistent environment flags. Startup validation is now at `server/index.js:25-39`; regression tests in `tests/production-startup.test.js`. | Test suite verifies mismatched staging/production values and invalid `NODE_ENV` fail closed. | Stage using `NODE_ENV=production`, `APP_ENV=staging`; verify host has the intended settings without exposing values. |
 | **P1, fixed in PR #10** | Plaid sync previously bounded pages without advancing the durable cursor; implementation in `server/plaid-sync.js`, route integration at `server/index.js:934-945,1006-1084`. | `tests/plaid-sync.integration.test.js` covers 12 pages, saved continuation after DB reopen, replay, add/modify/remove, and a partial provider failure; related unit tests cover bounded resume. | Exercise against Plaid Sandbox with synthetic users, then test outages/rate limits and stale-sync alerting. |
 | **P1, fixed in PR #10** | Browser bearer JWT exposure and session revocation; `server/session-cookies.js`, `server/index.js:427-460`, `src/App.tsx`. | Production uses Secure, HttpOnly, SameSite session cookies, CSRF proof, session-version checks, and logout/reset revocation. Production integration tests pass. Frontend session storage is limited to non-production. | Verify Google sign-in and provider flows in staging. Consider opaque server-side sessions as a future architecture decision; current JWT cookie remains valid for up to seven days unless revoked/version-changed. |
@@ -125,9 +125,9 @@ The production readiness remediation is on draft PR #10 and depends on open PR #
 
 ## Tests and exact results
 
-### Local checks run on the remediation worktree
+### Local checks run on reviewed code commit `1a5e402d162ba2ef7d676cf0d0cf7e545616084e`
 
-- `PATH=/tmp/grounded-node-runtime/bin:$PATH npm test` — **passed: 43 tests, 0 failures** on Node v22.23.3.
+- `PATH=/tmp/grounded-node-runtime/bin:$PATH npm test` — **passed: 44 tests, 0 failures** on Node v22.23.3.
 - `PATH=/tmp/grounded-node-runtime/bin:$PATH npm audit --audit-level=moderate` — **passed: 0 vulnerabilities**.
 - `PATH=/tmp/grounded-node-runtime/bin:$PATH npm run build` — **passed** (`tsc -b` and Vite); output included `dist/assets/index-DKp0qFp8.js` and `dist/assets/index-CnYiRr1h.css`.
 - `git diff --check` — **passed**.
@@ -135,7 +135,7 @@ The production readiness remediation is on draft PR #10 and depends on open PR #
 
 ### GitHub Actions evidence
 
-GitHub Actions run [#260](https://github.com/webhealthbusiness-max/app-/actions/runs/38684806194) on reviewed code commit `c9f94835531978b151310d372110e572bcb9980e` completed successfully. It ran `npm ci`, `npm audit --audit-level=moderate`, `npm test`, deployment-checker syntax, frontend build, Playwright Chromium E2E, and Docker build. This proves those checks in GitHub's runner, not on IONOS or with real external services.
+GitHub Actions run [#264](https://github.com/webhealthbusiness-max/app-/actions/runs/38685200094) on reviewed code commit `1a5e402d162ba2ef7d676cf0d0cf7e545616084e` completed successfully. It ran `npm ci`, `npm audit --audit-level=moderate`, `npm test`, deployment-checker syntax, frontend build, Playwright Chromium E2E, and Docker build. This proves those checks in GitHub's runner, not on IONOS or with real external services.
 
 The local browser runtime is not a reliable substitute for CI because this AlmaLinux workspace lacks browser system libraries (`libnspr4.so`). No local Playwright success is claimed. The public deployment checker is intentionally recorded as failed.
 
@@ -199,6 +199,7 @@ This report is a preparation guide; it does not authorize deployment. Do not mer
 - [x] Versioned baseline migrations, encrypted backup/restore utilities, and safe logging.
 - [x] Built-asset browser E2E and same-origin deployment check in CI.
 - [x] Fail startup on invalid/noncanonical production origins or an `APP_BASE_URL` origin omitted from the CORS allowlist.
+- [x] Validate production origins before creating/opening the SQLite database.
 - [x] Documentation corrected for password recovery implementation and hardened staging mode.
 
 These changes are in open draft PR #10, based on unmerged PR #1. They are not on the live service.
