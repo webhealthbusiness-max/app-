@@ -141,8 +141,8 @@ The local browser runtime is not a reliable substitute for CI because this AlmaL
 
 Additional environment checks on this workspace:
 
-- `PATH=/tmp/grounded-node-runtime/bin:$PATH npm run test:e2e` — **could not run assertions locally**: all three Playwright cases failed to launch Chromium because `libnspr4.so` is absent. GitHub Actions run #254 installed Chromium dependencies and passed the E2E step.
-- `docker build --tag grounded-local-audit .` — **could not run locally**: Docker daemon access was denied for `/var/run/docker.sock`. GitHub Actions run #254 passed the Docker build step.
+- `PATH=/tmp/grounded-node-runtime/bin:$PATH npm run test:e2e` — **could not run assertions locally**: all three Playwright cases failed to launch Chromium because `libnspr4.so` is absent. GitHub Actions run #264 installed Chromium dependencies and passed the E2E step.
+- `docker build --tag grounded-local-audit .` — **could not run locally**: Docker daemon access was denied for `/var/run/docker.sock`. GitHub Actions run #264 passed the Docker build step.
 
 ## Step-by-step staging acceptance tests
 
