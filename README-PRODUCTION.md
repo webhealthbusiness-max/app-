@@ -84,7 +84,7 @@ The current production startup guard requires complete SMTP settings.
 - [ ] Rebuild the frontend after setting `VITE_GOOGLE_CLIENT_ID`, then deploy both frontend and API configuration.
 - [ ] Test first-time Google signup, existing verified-email account linking, sign-in, rejected/expired credentials, and email notifications.
 - [ ] Test password signup/login, duplicate signups, invalid credentials, rate limiting, logout, and expired sessions over HTTPS.
-- [ ] Before a public launch, implement and test email verification and password reset, and review session/token storage and revocation. Consider MFA based on the threat model. These workflows are not currently implemented.
+- [ ] Email verification and password reset are implemented in code with hashed, expiring, single-use tokens and session revocation on reset. Before a public launch, complete real SMTP-backed staging tests, verify abuse limits and delivery/retry behavior, review session/token storage and revocation, and assess MFA based on the threat model. Implementation and unit tests alone do not prove the production email flow works.
 - [ ] Add clear support instructions for a user who did not initiate a security alert.
 
 ## 6. Configure Stripe and confirm billing
