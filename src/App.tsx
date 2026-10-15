@@ -186,15 +186,37 @@ const defaultForm: OnboardingForm = {
   savingsAllocation: 0,
 }
 
-const getStoredToken = () => localStorage.getItem('grounded-token')
+const COOKIE_SESSION_MARKER = 'cookie-session'
+const getCookieValue = (name: string) => document.cookie.split(';').map((value) => value.trim()).find((value) => value.startsWith(`${name}=`))?.slice(name.length + 1) || ''
+const hasCookieSession = () => Boolean(getCookieValue('grounded_csrf'))
+if (import.meta.env.PROD) localStorage.removeItem('grounded-token')
+const getStoredToken = () => hasCookieSession()
+  ? COOKIE_SESSION_MARKER
+  : import.meta.env.PROD ? '' : sessionStorage.getItem('grounded-token')
+const rememberAuthSession = (token?: string) => {
+  if (import.meta.env.PROD) {
+    sessionStorage.removeItem('grounded-token')
+    return
+  }
+  if (token) sessionStorage.setItem('grounded-token', token)
+}
+const clearAuthSession = () => {
+  sessionStorage.removeItem('grounded-token')
+  localStorage.removeItem('grounded-token')
+}
 
 async function fetchJson<T>(url: string, options: RequestInit = {}): Promise<T> {
+  const headers = new Headers({ 'Content-Type': 'application/json' })
+  new Headers(options.headers).forEach((value, key) => headers.set(key, value))
+  if (headers.get('Authorization') === `Bearer ${COOKIE_SESSION_MARKER}`) headers.delete('Authorization')
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes((options.method || 'GET').toUpperCase())) {
+    const csrfToken = getCookieValue('grounded_csrf')
+    if (csrfToken) headers.set('X-CSRF-Token', csrfToken)
+  }
   const response = await fetch(url, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...(options.headers || {}),
-    },
     ...options,
+    headers,
+    credentials: 'same-origin',
   })
 
   const data = await response.json().catch(() => ({}))
@@ -379,7 +401,8 @@ function App() {
       } catch (error) {
         console.error(error)
         setAuthError('Your session expired. Please log in again.')
-        localStorage.removeItem('grounded-token')
+        void fetchJson('/api/auth/logout', { method: 'POST' }).catch(() => undefined)
+        clearAuthSession()
         setIsAuthenticated(false)
       } finally {
         setLoadingDashboard(false)
@@ -394,11 +417,11 @@ function App() {
     setAuthBusy(true)
     setAuthError('')
     try {
-      const payload = await fetchJson<{ token: string; user: { name: string; email: string }; newUser: boolean }>('/api/auth/google', {
+      const payload = await fetchJson<{ token?: string; user: { name: string; email: string }; newUser: boolean }>('/api/auth/google', {
         method: 'POST',
         body: JSON.stringify({ credential }),
       })
-      localStorage.setItem('grounded-token', payload.token)
+      rememberAuthSession(payload.token)
       setForm((prev) => ({ ...prev, name: payload.user.name }))
       setIsAuthenticated(true)
       setOnboardingStep(0)
@@ -574,10 +597,10 @@ function App() {
         return
       }
       const payload: { token?: string; message?: string; user?: { name: string; email: string } } = authMode === 'login'
-        ? await fetchJson<{ token: string; user: { name: string; email: string } }>('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: authForm.email, password: authForm.password }) })
+        ? await fetchJson<{ token?: string; user: { name: string; email: string } }>('/api/auth/login', { method: 'POST', body: JSON.stringify({ email: authForm.email, password: authForm.password }) })
         : await fetchJson<{ token?: string; message?: string; user?: { name: string; email: string } }>('/api/auth/signup', { method: 'POST', body: JSON.stringify({ name: authForm.name, email: authForm.email, password: authForm.password }) })
-      if (!payload.token || !payload.user) { setAuthMessage(payload.message || 'Check your email for next steps.'); return }
-      localStorage.setItem('grounded-token', payload.token)
+      if (!payload.user || (!payload.token && !hasCookieSession())) { setAuthMessage(payload.message || 'Check your email for next steps.'); return }
+      rememberAuthSession(payload.token)
       setForm((prev) => ({ ...prev, name: payload.user!.name }))
       setIsAuthenticated(true)
       setOnboardingStep(0)
@@ -604,7 +627,8 @@ function App() {
   }
 
   const logout = () => {
-    localStorage.removeItem('grounded-token')
+    void fetchJson('/api/auth/logout', { method: 'POST' }).catch(() => undefined)
+    clearAuthSession()
     setIsAuthenticated(false)
     setDashboard(null)
     setBilling({ plan: 'free', status: 'free', currentPeriodEnd: null, prices: { monthly: 5.99, annual: 59.99 } })
@@ -933,7 +957,7 @@ function App() {
       headers: { Authorization: `Bearer ${token}` },
     })
 
-    localStorage.removeItem('grounded-token')
+    clearAuthSession()
     setDashboard(null)
     setIsAuthenticated(false)
     setAuthMode('signup')
@@ -1781,11 +1805,13 @@ function App() {
                       </label>
                       <label className="field">
                         <span>Frequency</span>
-                        <input value={billDraft.frequency} onChange={(event) => setBillDraft((prev) => ({ ...prev, frequency: event.target.value }))} />
+                        <select value={billDraft.frequency} onChange={(event) => setBillDraft((prev) => ({ ...prev, frequency: event.target.value }))}>
+                          <option>Weekly</option><option>Biweekly</option><option>Monthly</option><option>Quarterly</option><option>Yearly</option>
+                        </select>
                       </label>
                       <label className="field">
                         <span>Due date</span>
-                        <input value={billDraft.dueDate} onChange={(event) => setBillDraft((prev) => ({ ...prev, dueDate: event.target.value }))} />
+                        <input type="date" value={billDraft.dueDate} onChange={(event) => setBillDraft((prev) => ({ ...prev, dueDate: event.target.value }))} />
                       </label>
                       <label className="field">
                         <span>Category</span>
@@ -1816,11 +1842,13 @@ function App() {
                       </label>
                       <label className="field">
                         <span>Frequency</span>
-                        <input value={incomeDraft.frequency} onChange={(event) => setIncomeDraft((prev) => ({ ...prev, frequency: event.target.value }))} />
+                        <select value={incomeDraft.frequency} onChange={(event) => setIncomeDraft((prev) => ({ ...prev, frequency: event.target.value }))}>
+                          <option>Weekly</option><option>Biweekly</option><option>Monthly</option><option>Quarterly</option><option>Yearly</option>
+                        </select>
                       </label>
                       <label className="field">
                         <span>Next date</span>
-                        <input value={incomeDraft.nextDate} onChange={(event) => setIncomeDraft((prev) => ({ ...prev, nextDate: event.target.value }))} />
+                        <input type="date" value={incomeDraft.nextDate} onChange={(event) => setIncomeDraft((prev) => ({ ...prev, nextDate: event.target.value }))} />
                       </label>
                     </div>
                     <div className="wizard-actions">
@@ -1847,11 +1875,13 @@ function App() {
                       </label>
                       <label className="field">
                         <span>Frequency</span>
-                        <input value={subscriptionDraft.frequency} onChange={(event) => setSubscriptionDraft((prev) => ({ ...prev, frequency: event.target.value }))} />
+                        <select value={subscriptionDraft.frequency} onChange={(event) => setSubscriptionDraft((prev) => ({ ...prev, frequency: event.target.value }))}>
+                          <option>Weekly</option><option>Biweekly</option><option>Monthly</option><option>Quarterly</option><option>Yearly</option>
+                        </select>
                       </label>
                       <label className="field">
                         <span>Next date</span>
-                        <input value={subscriptionDraft.nextDate} onChange={(event) => setSubscriptionDraft((prev) => ({ ...prev, nextDate: event.target.value }))} />
+                        <input type="date" value={subscriptionDraft.nextDate} onChange={(event) => setSubscriptionDraft((prev) => ({ ...prev, nextDate: event.target.value }))} />
                       </label>
                     </div>
                     <div className="wizard-actions">

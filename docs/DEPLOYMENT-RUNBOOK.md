@@ -1,6 +1,6 @@
 # Grounded deployment preparation and release gate
 
-Grounded is not deployed yet. This document prepares the release process but does not create a hosting account, domain, DNS records, TLS certificate, persistent volume, or production service.
+The public Grounded site is live at `https://www.mygroundedfinance.online`. This runbook prepares a staging/release process; it does not establish that the live site is running this repository's current release branch or that this repository created its hosting, DNS, TLS, storage, or production service. Read-only checks confirmed Caddy-to-Express responses and an Origin-dependent HTTP 403 on assets and health endpoints. The CORS allowlist configuration has not been changed.
 
 ## Architecture
 
@@ -34,4 +34,4 @@ Do not deploy or enable live financial services until all blocking security and 
 
 ## Current status
 
-Hosting choice: VPS. Domain: not yet registered/configured. The next action is to register a domain and provision a hardened VPS, then deploy to staging first using docs/VPS-DEPLOYMENT-CHECKLIST.md. No VPS, DNS, TLS certificate, persistent volume, or production service has been created by this preparation. Do not represent this runbook as a successful deployment.
+Hosting choice recorded in issue #8: IONOS VPS on AlmaLinux 9, with Caddy in front of the app. The public domain is active, but access to inspect the live Docker container, host configuration, persistent volume, and deployed commit was unavailable. The next action is to correct the exact production `ALLOWED_ORIGINS` values after owner approval, then verify the browser asset and API health checks. Do not treat this repository runbook as proof that staging, persistence, backups, or deployment rollback have been exercised.

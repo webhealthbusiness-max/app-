@@ -1,6 +1,6 @@
 # Grounded GitHub Actions Secrets Setup
 
-Grounded currently uses GitHub Actions for CI and is not deployed to a hosting provider. The normal CI workflow (install, audit, tests, build) should not need Plaid or Stripe credentials.
+The public Grounded site is live, but no evidence here shows that GitHub Actions deploys it or that production uses this repository's current branch. The current workflow is CI-only (install, audit, tests, build, and container build) and should not need Plaid or Stripe credentials. Do not add live provider secrets to pull-request workflows.
 
 ## Security rules
 
@@ -38,12 +38,16 @@ Open Settings → Environments → staging → Add secret. Add values directly i
 | STRIPE_PRICE_MONTHLY | Test-mode Price ID for the monthly subscription |
 | STRIPE_PRICE_ANNUAL | Test-mode Price ID for the annual subscription |
 
-Add non-secret environment variables in the same environment only if a future staging integration workflow needs them:
+These values belong in the **staging API host configuration**. Add them as GitHub Environment variables only if a future staging workflow actually consumes them; GitHub Environment values do not configure the running API:
 
 - PLAID_ENV=sandbox
-- NODE_ENV=development (do not set production here)
-- APP_BASE_URL: staging URL only after one exists
-- ALLOWED_ORIGINS: exact staging frontend origin only after one exists
+- NODE_ENV=production
+- APP_ENV=staging
+- APP_BASE_URL: exact staging HTTPS URL
+- ALLOWED_ORIGINS: comma-separated exact staging HTTPS origins (never `*`)
+- DATABASE_PATH: persistent staging data volume path
+
+The hardened staging runtime uses `NODE_ENV=production` and `APP_ENV=staging`. It requires production security safeguards while the app enforces Stripe test mode and Plaid Sandbox. Do not use `NODE_ENV=development` for a release-candidate staging deployment.
 
 Generate a new encryption key locally, without sharing it:
 

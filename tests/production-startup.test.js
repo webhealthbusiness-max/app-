@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
+import { existsSync } from 'node:fs'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { spawnSync } from 'node:child_process'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
+import os from 'node:os'
 import path from 'node:path'
 
 const serverPath = fileURLToPath(new URL('../server/index.js', import.meta.url))
@@ -61,6 +64,32 @@ test('production startup requires a durable database path', () => {
   assert.match(result.stderr, /DATABASE_PATH must point to a persistent production data volume/)
 })
 
+test('production rejects an APP_BASE_URL origin mismatch before creating or opening SQLite', async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'grounded-invalid-origin-'))
+  const databasePath = path.join(directory, 'should-not-be-created.sqlite')
+  t.after(() => rm(directory, { recursive: true, force: true }))
+
+  const result = runWithProductionEnv({
+    APP_ENV: 'staging',
+    JWT_SECRET: 'synthetic-test-secret-that-is-at-least-32-chars',
+    ALLOWED_ORIGINS: 'https://allowed.example',
+    DATABASE_PATH: databasePath,
+    STRIPE_SECRET_KEY: 'sk_test_synthetic',
+    STRIPE_WEBHOOK_SECRET: 'whsec_synthetic',
+    STRIPE_PRICE_MONTHLY: 'price_synthetic_monthly',
+    STRIPE_PRICE_ANNUAL: 'price_synthetic_annual',
+    APP_BASE_URL: 'https://different.example',
+    SMTP_HOST: 'smtp.example.test',
+    SMTP_USER: 'synthetic-user',
+    SMTP_PASS: 'synthetic-password',
+    SMTP_FROM: 'Grounded <no-reply@example.test>',
+  })
+
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /APP_BASE_URL origin must be included in ALLOWED_ORIGINS/)
+  assert.equal(existsSync(databasePath), false, 'configuration rejection must happen before SQLite is created')
+})
+
 test('production-hardening staging mode explicitly requires test providers while live mode requires live providers', async () => {
   const { readFile } = await import('node:fs/promises')
   const source = await readFile(serverPath, 'utf8')
@@ -95,7 +124,7 @@ test('task completion update enforces ownership in the write query', async () =>
   assert.notEqual(routeStart, -1, 'task toggle route must exist')
   const routeEnd = source.indexOf('\napp.', routeStart + 1)
   const route = source.slice(routeStart, routeEnd === -1 ? source.length : routeEnd)
-  assert.match(route, /UPDATE tasks SET completed = \? WHERE id = \? AND user_id = \?/, 'task update must be scoped to the authenticated owner')
+  assert.match(route, /UPDATE tasks SET completed = CASE completed WHEN 0 THEN 1 ELSE 0 END WHERE id = \? AND user_id = \?/, 'atomic task toggle must be scoped to the authenticated owner')
 })
 
 
@@ -115,7 +144,8 @@ test('Stripe subscription persistence rejects billing identifiers owned by anoth
 test('email verification and password recovery use expiring single-use hashed tokens and revoke sessions on reset', async () => {
   const { readFile } = await import('node:fs/promises')
   const source = await readFile(serverPath, 'utf8')
-  assert.match(source, /CREATE TABLE IF NOT EXISTS auth_tokens/)
+  const migrationSource = await readFile(new URL('../server/migrations.js', import.meta.url), 'utf8')
+  assert.match(migrationSource, /CREATE TABLE IF NOT EXISTS auth_tokens/)
   assert.match(source, /createHash\('sha256'\)\.update\(token\)\.digest\('hex'\)/)
   assert.ok(source.includes("app.post('/api/auth/verify-email'"))
   assert.ok(source.includes("app.post('/api/auth/password-reset/request'"))
@@ -129,6 +159,19 @@ test('staging and production APP_ENV values require NODE_ENV=production', () => 
   const result = runWithProductionEnv({ NODE_ENV: 'development', APP_ENV: 'production' })
   assert.notEqual(result.status, 0, 'production APP_ENV must not run with development NODE_ENV')
   assert.match(result.stderr, /APP_ENV=staging or production requires NODE_ENV=production/)
+})
+
+test('unknown NODE_ENV values fail closed instead of falling back to development safeguards', () => {
+  const result = runWithProductionEnv({ NODE_ENV: 'Production', APP_ENV: 'development' })
+  assert.notEqual(result.status, 0, 'an unrecognized NODE_ENV must not start the app with development settings')
+  assert.match(result.stderr, /NODE_ENV must be development, test, or production/)
+})
+
+test('production trusts the documented single reverse-proxy hop for client IP rate limits', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const source = await readFile(serverPath, 'utf8')
+  assert.match(source, /configuredTrustProxy === undefined && isProduction[\s\S]*app\.set\('trust proxy', 1\)/)
+  assert.match(source, /TRUST_PROXY_HOPS must be an integer from 1 to 5/)
 })
 
 test('Plaid sync uses a bounded batch and commits its latest page cursor', async () => {
@@ -161,5 +204,6 @@ test('production responses start CSP validation in report-only mode without unsa
   assert.match(source, /Content-Security-Policy-Report-Only/)
   assert.match(source, /script-src 'self' https:\/\/accounts\.google\.com https:\/\/cdn\.plaid\.com/)
   assert.match(source, /frame-ancestors 'none'/)
+  assert.match(source, /style-src-attr 'unsafe-inline'/, 'inline styles should be limited to attributes used by React')
   assert.doesNotMatch(source, /script-src[^\n]*unsafe-eval/)
 })

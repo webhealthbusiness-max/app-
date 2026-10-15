@@ -23,7 +23,7 @@ Grounded shows a branded launch screen while the app starts and verifies a saved
 - Sign up with email/password
 - Login with the same credentials
 - Optional Google sign-in using a verified Google Identity Services ID token
-- All protected routes use a bearer token from the login response
+- In production, protected routes use Secure, HttpOnly, SameSite session cookies with CSRF proof; bearer tokens are returned only in non-production environments
 
 ## Account notifications and email
 
@@ -116,14 +116,14 @@ Do not accept real financial data or describe the app as production-ready until 
 - Configure Stripe products/prices, live keys, customer portal, webhook, billing support contact, refunds/cancellation terms, and tax handling.
 - Obtain Plaid approval for production access and review the bank-data consent, privacy disclosures, retention/deletion behavior, support process, and applicable legal requirements before connecting real financial institutions.
 - Replace SQLite with a managed database adapter suitable for production, with encrypted backups, restore drills, migrations, and access controls.
-- Replace the in-memory rate limiter with a shared rate-limit store before running multiple instances.
-- Add email verification, password reset, and a reviewed session/token storage strategy; decide and implement MFA based on the risk assessment.
+- Replace the SQLite-backed single-instance rate limiter with shared storage before running multiple API instances.
+- The current branch implements email verification and password reset, with expiring single-use hashed tokens and session-version revocation. Production uses Secure, HttpOnly, SameSite cookies with CSRF proof. Verify SMTP delivery and recovery flows in staging; decide whether to add MFA through a separate risk review.
 - Arrange qualified legal/privacy review of the disclosures, retention/deletion behavior, and applicable financial/privacy regulations.
 - Configure production logging, error tracking, alerting, uptime monitoring, incident response, and operational ownership.
-- Complete an independent security review and broaden automated tests (including browser end-to-end tests and deployment checks).
+- Complete an independent security review and staging browser/provider tests. CI now includes synthetic browser end-to-end tests and a same-origin deployment checker; these do not replace real staging verification.
 - Verify deletion and retention behavior across database files, backups, logs, and any external processors.
 - Perform real-device browser QA and accessibility review.
 
 ## Notes
 
-The app is an MVP suitable for local evaluation. Automatic bank synchronization requires Plaid production approval and credentials; email verification/password reset, production database hosting, and legal/compliance certification are not implemented. Forecasts are estimates from manually entered profile values and are not financial advice.
+The app is an MVP suitable for local evaluation. Automatic bank synchronization requires Plaid production approval and credentials; production hosting, off-host backup operations, and legal/compliance review are not complete. Email verification and password recovery are implemented in this release branch, but SMTP delivery must be verified in staging. Forecasts are estimates from manually entered profile values and are not financial advice.

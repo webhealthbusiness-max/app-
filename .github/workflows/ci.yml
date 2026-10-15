@@ -22,4 +22,6 @@ jobs:
       - run: npm test
       - run: node --check scripts/check-deployment.mjs
       - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
       - run: docker build --tag grounded-ci .

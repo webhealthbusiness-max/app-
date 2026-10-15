@@ -8,7 +8,13 @@ import { OAuth2Client } from 'google-auth-library'
 import { Configuration, PlaidApi, PlaidEnvironments, Products } from 'plaid'
 import Database from 'better-sqlite3'
 import { createPlaidSync } from './plaid-sync.js'
+import { assertAppBaseOriginAllowed, parseAllowedOrigins } from './origins.js'
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto'
+import { createRateLimiter } from './rate-limit.js'
+import { getSafeErrorCode } from './safe-logging.js'
+import { migrateDatabase } from './migrations.js'
+import { clearSessionCookieHeaders, createSessionCookieHeaders, getCookie, hasValidCsrfProof, SESSION_COOKIE_NAME } from './session-cookies.js'
+import { isAllowedFrequency, isAllowedSubscriptionStatus, isOptionalBoolean, isValidIsoDate, parseCurrency, parseSignedCurrency } from './validation.js'
 import { existsSync, mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -17,6 +23,10 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const app = express()
 const port = Number(process.env.PORT || 4000)
+const nodeEnvironment = process.env.NODE_ENV || 'development'
+if (!['development', 'test', 'production'].includes(nodeEnvironment)) {
+  throw new Error('NODE_ENV must be development, test, or production.')
+}
 const isProduction = process.env.NODE_ENV === 'production'
 const appEnvironment = process.env.APP_ENV || (isProduction ? 'production' : 'development')
 if (!['development', 'staging', 'production'].includes(appEnvironment)) {
@@ -85,13 +95,6 @@ if (isProduction && appEnvironment === 'production' && !process.env.STRIPE_SECRE
 if (isProduction && appEnvironment === 'staging' && !process.env.STRIPE_SECRET_KEY.startsWith('sk_test_')) {
   throw new Error('Staging billing must use a Stripe test secret key.')
 }
-const databasePath = process.env.DATABASE_PATH
-  ? path.resolve(process.env.DATABASE_PATH)
-  : path.join(__dirname, '..', 'data', 'grounded.db')
-mkdirSync(path.dirname(databasePath), { recursive: true })
-const db = new Database(databasePath)
-db.pragma('foreign_keys = ON')
-db.pragma('journal_mode = WAL')
 const JWT_SECRET = process.env.JWT_SECRET || (isProduction ? '' : 'grounded-dev-secret')
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null
 const googleClientId = process.env.GOOGLE_CLIENT_ID || ''
@@ -109,7 +112,7 @@ const plaidClient = plaidConfigured
   : null
 const bankTokenEncryptionKey = plaidConfigured ? Buffer.from(process.env.BANK_TOKEN_ENCRYPTION_KEY, 'hex') : null
 const logPlaidFailure = (context, error) => {
-  console.error(context, error?.response?.data?.error_code || error?.code || 'Unknown Plaid error')
+  console.error(context, getSafeErrorCode(error, error?.response?.data?.error_code))
 }
 const emailTransport = process.env.SMTP_HOST
   ? nodemailer.createTransport({
@@ -141,27 +144,25 @@ if (isProduction) {
     throw new Error('Production APP_BASE_URL must use HTTPS and cannot be localhost.')
   }
 }
+const allowedOrigins = parseAllowedOrigins(process.env.ALLOWED_ORIGINS, { production: isProduction })
+if (isProduction) assertAppBaseOriginAllowed(appBaseUrl, allowedOrigins)
 const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS || 60000)
 const RATE_LIMITS = { signup: 5, login: 10 }
 if (!Number.isInteger(RATE_LIMIT_WINDOW_MS) || RATE_LIMIT_WINDOW_MS < 1000 || RATE_LIMIT_WINDOW_MS > 3600000) {
   throw new Error('RATE_LIMIT_WINDOW_MS must be an integer between 1000 and 3600000.')
 }
-const requestBuckets = new Map()
+const databasePath = process.env.DATABASE_PATH
+  ? path.resolve(process.env.DATABASE_PATH)
+  : path.join(__dirname, '..', 'data', 'grounded.db')
+mkdirSync(path.dirname(databasePath), { recursive: true })
+const db = new Database(databasePath)
+db.pragma('foreign_keys = ON')
+db.pragma('journal_mode = WAL')
 const appStartTime = Date.now()
-const MAX_RATE_LIMIT_BUCKETS = 10000
 
 const sanitizeText = (value, fallback = '') => {
   const text = typeof value === 'string' ? value.trim() : ''
   return text || fallback
-}
-
-const parseCurrency = (value) => {
-  if (value === null || value === undefined || value === '') return null
-  const parsed = Number(value)
-  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 100000000) {
-    return null
-  }
-  return parsed
 }
 
 const isValidEmail = (value) => (
@@ -169,34 +170,12 @@ const isValidEmail = (value) => (
   && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
 )
 
-const getRateLimitKey = (req, prefix) => `${prefix}:${req.ip || req.headers['x-forwarded-for'] || 'unknown'}`
-
-const enforceRateLimit = (req, prefix, maxRequests) => {
-  const key = getRateLimitKey(req, prefix)
-  const now = Date.now()
-  if (requestBuckets.size >= MAX_RATE_LIMIT_BUCKETS) {
-    for (const [bucketKey, bucket] of requestBuckets) {
-      if (bucket.resetAt <= now) requestBuckets.delete(bucketKey)
-    }
-    if (requestBuckets.size >= MAX_RATE_LIMIT_BUCKETS && !requestBuckets.has(key)) {
-      return false
-    }
-  }
-  const current = requestBuckets.get(key) || { count: 0, resetAt: now + RATE_LIMIT_WINDOW_MS }
-
-  if (now > current.resetAt) {
-    current.count = 0
-    current.resetAt = now + RATE_LIMIT_WINDOW_MS
-  }
-
-  if (current.count >= maxRequests) {
-    requestBuckets.set(key, current)
-    return false
-  }
-
-  current.count += 1
-  requestBuckets.set(key, current)
-  return true
+const rateLimiter = createRateLimiter({ db, secret: JWT_SECRET, windowMs: RATE_LIMIT_WINDOW_MS })
+const enforceRateLimit = (req, prefix, maxRequests, subject = '') => {
+  const ipKey = `${prefix}:ip:${req.ip || 'unknown'}`
+  if (!rateLimiter.consume(ipKey, maxRequests)) return false
+  if (!subject) return true
+  return rateLimiter.consume(`${prefix}:subject:${String(subject).trim().toLowerCase()}`, maxRequests)
 }
 
 const renderLegalPage = (pageKey, page) => `<!doctype html>
@@ -320,13 +299,12 @@ const publicLegalPages = {
   },
 }
 
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'http://localhost:3000,http://localhost:3003,http://localhost:4173').split(',').map((origin) => origin.trim()).filter(Boolean)
-if (isProduction && allowedOrigins.some((origin) => origin.includes('localhost'))) {
-  throw new Error('Production ALLOWED_ORIGINS cannot include localhost.')
-}
-
 const configuredTrustProxy = process.env.TRUST_PROXY_HOPS
-if (configuredTrustProxy !== undefined) {
+if (configuredTrustProxy === undefined && isProduction) {
+  // The documented production topology is Caddy -> app. Trust its forwarded
+  // client address so per-IP limits distinguish clients behind the proxy.
+  app.set('trust proxy', 1)
+} else if (configuredTrustProxy !== undefined) {
   const trustedHops = Number(configuredTrustProxy)
   if (!Number.isInteger(trustedHops) || trustedHops < 1 || trustedHops > 5) {
     throw new Error('TRUST_PROXY_HOPS must be an integer from 1 to 5.')
@@ -348,7 +326,7 @@ app.use((req, res, next) => {
       'Content-Security-Policy-Report-Only',
       "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; " +
       "script-src 'self' https://accounts.google.com https://cdn.plaid.com; " +
-      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " +
+      "style-src 'self' https://fonts.googleapis.com; style-src-attr 'unsafe-inline'; " +
       "font-src 'self' data: https://fonts.gstatic.com; " +
       "img-src 'self' data: blob: https:; " +
       "connect-src 'self' https://accounts.google.com https://oauth2.googleapis.com https://*.plaid.com https://api.stripe.com; " +
@@ -369,6 +347,16 @@ app.use(cors({
   },
   credentials: true,
 }))
+app.use((req, res, next) => {
+  if (
+    ['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)
+    && getCookie(req, SESSION_COOKIE_NAME)
+    && !hasValidCsrfProof(req, JWT_SECRET)
+  ) {
+    return res.status(403).json({ error: 'A valid CSRF token is required.' })
+  }
+  return next()
+})
 app.post('/api/billing/webhook', express.raw({ type: 'application/json', limit: '1mb' }), async (req, res, next) => {
   if (!stripe || !process.env.STRIPE_WEBHOOK_SECRET) {
     return res.status(503).json({ error: 'Subscription billing is not configured.' })
@@ -385,6 +373,26 @@ app.post('/api/billing/webhook', express.raw({ type: 'application/json', limit: 
     return res.status(400).json({ error: 'Invalid Stripe webhook signature.' })
   }
 
+  if (typeof event.id !== 'string' || !event.id || !Number.isSafeInteger(event.created)) {
+    return res.status(400).json({ error: 'Invalid Stripe event metadata.' })
+  }
+  const nowSeconds = Math.floor(Date.now() / 1000)
+  db.prepare("DELETE FROM stripe_webhook_events WHERE status = 'processed' AND attempted_at < ?").run(nowSeconds - 180 * 24 * 60 * 60)
+  const claim = db.prepare(`
+    INSERT INTO stripe_webhook_events (event_id, event_type, event_created, status, attempted_at)
+    VALUES (?, ?, ?, 'processing', ?)
+    ON CONFLICT(event_id) DO UPDATE SET
+      status = 'processing',
+      attempted_at = excluded.attempted_at
+    WHERE stripe_webhook_events.status = 'failed' OR stripe_webhook_events.attempted_at < ?
+    RETURNING event_id
+  `).get(event.id, event.type, event.created, nowSeconds, nowSeconds - 5 * 60)
+  if (!claim) {
+    const prior = db.prepare('SELECT status FROM stripe_webhook_events WHERE event_id = ?').get(event.id)
+    if (prior?.status === 'processed') return res.json({ received: true, duplicate: true })
+    return res.status(503).json({ error: 'This Stripe event is already being processed. Retry later.' })
+  }
+
   try {
     if (event.type === 'checkout.session.completed') {
       const session = event.data.object
@@ -393,7 +401,7 @@ app.post('/api/billing/webhook', express.raw({ type: 'application/json', limit: 
         const subscription = await stripe.subscriptions.retrieve(subscriptionId)
         const userId = Number(session.metadata?.userId || subscription.metadata?.userId)
         if (Number.isInteger(userId) && userId > 0) {
-          persistStripeSubscription(userId, session.customer, subscription)
+          persistStripeSubscription(userId, session.customer, subscription, event.created)
         }
       }
     } else if (event.type === 'customer.subscription.updated' || event.type === 'customer.subscription.deleted') {
@@ -402,21 +410,30 @@ app.post('/api/billing/webhook', express.raw({ type: 'application/json', limit: 
         .get(typeof subscription.customer === 'string' ? subscription.customer : subscription.customer.id)
       const userId = Number(subscription.metadata?.userId || user?.user_id)
       if (Number.isInteger(userId) && userId > 0) {
-        persistStripeSubscription(userId, subscription.customer, subscription)
+        persistStripeSubscription(userId, subscription.customer, subscription, event.created)
       }
     }
+    db.prepare("UPDATE stripe_webhook_events SET status = 'processed', processed_at = CURRENT_TIMESTAMP WHERE event_id = ?").run(event.id)
     return res.json({ received: true })
   } catch (error) {
+    db.prepare("UPDATE stripe_webhook_events SET status = 'failed', attempted_at = ? WHERE event_id = ?").run(Math.floor(Date.now() / 1000), event.id)
     return next(error)
   }
 })
 app.use(express.json({ limit: '1mb' }))
 
 const createUserToken = (user) => jwt.sign({ id: user.id, email: user.email, sv: Number(user.session_version || 0) }, JWT_SECRET, { expiresIn: '7d' })
+const respondWithUserSession = (res, user, { status = 200, extra = {} } = {}) => {
+  const token = createUserToken(user)
+  if (isProduction) res.setHeader('Set-Cookie', createSessionCookieHeaders({ sessionToken: token, secret: JWT_SECRET, secure: true }))
+  return res.status(status).json({ ...extra, ...(!isProduction ? { token } : {}), user })
+}
 
 const withUser = (req, res, next) => {
   const authHeader = req.headers.authorization || ''
-  const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+  const cookieToken = getCookie(req, SESSION_COOKIE_NAME)
+  const bearerToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null
+  const token = cookieToken || (!isProduction ? bearerToken : null)
 
   if (!token) {
     return res.status(401).json({ error: 'Authentication required.' })
@@ -468,196 +485,7 @@ const createUserSeedData = (userId) => {
 
 }
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    email TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
-    google_sub TEXT UNIQUE,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS financial_profiles (
-    user_id INTEGER PRIMARY KEY,
-    monthly_income INTEGER NOT NULL DEFAULT 0,
-    current_money INTEGER NOT NULL DEFAULT 0,
-    fixed_expenses INTEGER NOT NULL DEFAULT 0,
-    planned_spending INTEGER NOT NULL DEFAULT 0,
-    savings_allocation INTEGER NOT NULL DEFAULT 0,
-    tracking_mode TEXT NOT NULL DEFAULT 'Hybrid',
-    focus_areas TEXT NOT NULL DEFAULT '[]',
-    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS tasks (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    title TEXT NOT NULL,
-    category TEXT NOT NULL,
-    due_label TEXT NOT NULL,
-    priority TEXT NOT NULL,
-    completed INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS goals (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    name TEXT NOT NULL,
-    current_amount INTEGER NOT NULL DEFAULT 0,
-    target_amount INTEGER NOT NULL DEFAULT 0,
-    due_date TEXT NOT NULL,
-    contribution TEXT NOT NULL,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS transactions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    description TEXT NOT NULL,
-    amount INTEGER NOT NULL,
-    category TEXT NOT NULL,
-    type TEXT NOT NULL,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS bills (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    name TEXT NOT NULL,
-    amount INTEGER NOT NULL DEFAULT 0,
-    frequency TEXT NOT NULL DEFAULT 'Monthly',
-    due_date TEXT NOT NULL,
-    category TEXT NOT NULL,
-    is_fixed INTEGER NOT NULL DEFAULT 1,
-    is_estimated INTEGER NOT NULL DEFAULT 0,
-    active INTEGER NOT NULL DEFAULT 1,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS incomes (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    source TEXT NOT NULL,
-    amount INTEGER NOT NULL DEFAULT 0,
-    frequency TEXT NOT NULL DEFAULT 'Monthly',
-    next_date TEXT NOT NULL,
-    is_variable INTEGER NOT NULL DEFAULT 0,
-    notes TEXT,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS subscriptions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    merchant TEXT NOT NULL,
-    amount INTEGER NOT NULL DEFAULT 0,
-    frequency TEXT NOT NULL DEFAULT 'Monthly',
-    next_date TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'Active',
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(user_id) REFERENCES users(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS accounts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    name TEXT NOT NULL,
-    type TEXT NOT NULL,
-    balance REAL NOT NULL DEFAULT 0,
-    plaid_account_id TEXT,
-    plaid_item_id TEXT,
-    mask TEXT,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-  );
-
-  CREATE TABLE IF NOT EXISTS bank_connections (
-    item_id TEXT PRIMARY KEY,
-    user_id INTEGER NOT NULL,
-    institution_name TEXT NOT NULL,
-    encrypted_access_token TEXT NOT NULL,
-    encryption_iv TEXT NOT NULL,
-    encryption_tag TEXT NOT NULL,
-    cursor TEXT,
-    status TEXT NOT NULL DEFAULT 'connected',
-    last_synced_at TEXT,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-  );
-
-  CREATE TABLE IF NOT EXISTS user_notifications (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER NOT NULL,
-    event TEXT NOT NULL,
-    title TEXT NOT NULL,
-    message TEXT NOT NULL,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    read_at TEXT,
-    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-  );
-
-  CREATE TABLE IF NOT EXISTS notification_emails (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    recipient TEXT NOT NULL,
-    subject TEXT NOT NULL,
-    message TEXT NOT NULL,
-    status TEXT NOT NULL DEFAULT 'queued',
-    attempts INTEGER NOT NULL DEFAULT 0,
-    next_attempt_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS billing_subscriptions (
-    user_id INTEGER PRIMARY KEY,
-    stripe_customer_id TEXT UNIQUE,
-    checkout_session_id TEXT,
-    stripe_subscription_id TEXT UNIQUE,
-    status TEXT NOT NULL DEFAULT 'free',
-    price_id TEXT,
-    current_period_end TEXT,
-    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-  );
-`) 
-db.prepare("UPDATE notification_emails SET status = 'queued' WHERE status = 'sending'").run()
-const userColumns = new Set(db.pragma('table_info(users)').map((column) => column.name))
-if (!userColumns.has('session_version')) db.exec('ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 0')
-if (!userColumns.has('email_verified')) db.exec('ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 1')
-db.exec(`CREATE TABLE IF NOT EXISTS auth_tokens (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL, purpose TEXT NOT NULL CHECK (purpose IN ('verify_email', 'reset_password')), expires_at TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE); CREATE INDEX IF NOT EXISTS auth_tokens_user_purpose_idx ON auth_tokens(user_id, purpose);`)
-if (!userColumns.has('google_sub')) {
-  db.exec('ALTER TABLE users ADD COLUMN google_sub TEXT')
-  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS users_google_sub_unique ON users(google_sub) WHERE google_sub IS NOT NULL')
-}
-const accountColumns = new Set(db.pragma('table_info(accounts)').map((column) => column.name))
-for (const [column, definition] of [
-  ['plaid_account_id', 'TEXT'],
-  ['plaid_item_id', 'TEXT'],
-  ['mask', 'TEXT'],
-  ['updated_at', 'TEXT'],
-]) {
-  if (!accountColumns.has(column)) db.exec(`ALTER TABLE accounts ADD COLUMN ${column} ${definition}`)
-}
-db.exec('CREATE UNIQUE INDEX IF NOT EXISTS accounts_plaid_account_unique ON accounts(plaid_account_id) WHERE plaid_account_id IS NOT NULL')
-const transactionColumns = new Set(db.pragma('table_info(transactions)').map((column) => column.name))
-if (!transactionColumns.has('source')) db.exec("ALTER TABLE transactions ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
-if (!transactionColumns.has('provider_transaction_id')) db.exec('ALTER TABLE transactions ADD COLUMN provider_transaction_id TEXT')
-if (!transactionColumns.has('account_id')) db.exec('ALTER TABLE transactions ADD COLUMN account_id INTEGER')
-if (!transactionColumns.has('plaid_item_id')) db.exec('ALTER TABLE transactions ADD COLUMN plaid_item_id TEXT')
-db.exec('CREATE UNIQUE INDEX IF NOT EXISTS transactions_provider_id_unique ON transactions(provider_transaction_id) WHERE provider_transaction_id IS NOT NULL')
-const billingColumns = new Set(db.pragma('table_info(billing_subscriptions)').map((column) => column.name))
-if (!billingColumns.has('checkout_session_id')) {
-  db.exec('ALTER TABLE billing_subscriptions ADD COLUMN checkout_session_id TEXT')
-}
+migrateDatabase(db)
 
 const encryptBankAccessToken = (accessToken) => {
   if (!bankTokenEncryptionKey) throw new Error('Bank token encryption is not configured.')
@@ -716,7 +544,7 @@ const deliverQueuedEmails = async () => {
         const attempts = email.attempts + 1
         if (attempts >= 5) {
           db.prepare('DELETE FROM notification_emails WHERE id = ?').run(email.id)
-          console.error('Notification email permanently failed:', error?.code || error?.message || 'Unknown SMTP error')
+          console.error('Notification email permanently failed:', getSafeErrorCode(error))
         } else {
           const retryAfterMinutes = 2 ** attempts
           db.prepare(`
@@ -724,7 +552,7 @@ const deliverQueuedEmails = async () => {
             SET status = 'queued', attempts = ?, next_attempt_at = datetime('now', ?)
             WHERE id = ?
           `).run(attempts, `+${retryAfterMinutes} minutes`, email.id)
-          console.error('Notification email delivery failed; it will be retried:', error?.code || error?.message || 'Unknown SMTP error')
+          console.error('Notification email delivery failed; it will be retried:', getSafeErrorCode(error))
         }
       }
     }
@@ -735,9 +563,11 @@ const deliverQueuedEmails = async () => {
 const notificationEmailTimer = setInterval(() => { void deliverQueuedEmails() }, 30000)
 notificationEmailTimer.unref()
 
-const persistStripeSubscription = (userId, customer, subscription) => {
+const persistStripeSubscription = (userId, customer, subscription, eventCreated = 0) => {
   if (!db.prepare('SELECT 1 FROM users WHERE id = ?').get(userId)) return
-  const previousStatus = db.prepare('SELECT status FROM billing_subscriptions WHERE user_id = ?').get(userId)?.status
+  const previousRecord = db.prepare('SELECT status, stripe_event_created FROM billing_subscriptions WHERE user_id = ?').get(userId)
+  if (eventCreated && previousRecord && Number(previousRecord.stripe_event_created || 0) > eventCreated) return false
+  const previousStatus = previousRecord?.status
   const customerId = typeof customer === 'string' ? customer : customer?.id
   const conflictingBillingRecords = db.prepare(`
     SELECT user_id FROM billing_subscriptions
@@ -752,8 +582,8 @@ const persistStripeSubscription = (userId, customer, subscription) => {
     ? new Date(subscription.current_period_end * 1000).toISOString()
     : null
   db.prepare(`
-    INSERT INTO billing_subscriptions (user_id, stripe_customer_id, checkout_session_id, stripe_subscription_id, status, price_id, current_period_end)
-    VALUES (?, ?, NULL, ?, ?, ?, ?)
+    INSERT INTO billing_subscriptions (user_id, stripe_customer_id, checkout_session_id, stripe_subscription_id, status, price_id, current_period_end, stripe_event_created)
+    VALUES (?, ?, NULL, ?, ?, ?, ?, ?)
     ON CONFLICT(user_id) DO UPDATE SET
       stripe_customer_id = excluded.stripe_customer_id,
       checkout_session_id = NULL,
@@ -761,8 +591,9 @@ const persistStripeSubscription = (userId, customer, subscription) => {
       status = excluded.status,
       price_id = excluded.price_id,
       current_period_end = excluded.current_period_end,
+      stripe_event_created = excluded.stripe_event_created,
       updated_at = CURRENT_TIMESTAMP
-  `).run(userId, customerId || null, subscription.id, subscription.status, priceId, currentPeriodEnd)
+  `).run(userId, customerId || null, subscription.id, subscription.status, priceId, currentPeriodEnd, eventCreated)
   if (previousStatus !== subscription.status) {
     const user = db.prepare('SELECT id, name, email FROM users WHERE id = ?').get(userId)
     if (user) {
@@ -775,6 +606,7 @@ const persistStripeSubscription = (userId, customer, subscription) => {
       )
     }
   }
+  return true
 }
 
 const getBillingStatus = (userId) => {
@@ -813,9 +645,9 @@ const queueAuthEmail = (userId, recipient, subject, message) => {
 
 app.post('/api/auth/signup', (req, res) => {
   const { name, email, password } = req.body || {}
-  if (!enforceRateLimit(req, 'signup', RATE_LIMITS.signup)) return res.status(429).json({ error: 'Too many sign-up attempts. Please wait a moment and try again.' })
   const safeName = sanitizeText(name)
   const safeEmail = sanitizeText(email).toLowerCase()
+  if (!enforceRateLimit(req, 'signup', RATE_LIMITS.signup, safeEmail)) return res.status(429).json({ error: 'Too many sign-up attempts. Please wait a moment and try again.' })
   const safePassword = String(password || '')
   if (!safeName || safeName.length > 80 || !isValidEmail(safeEmail) || safePassword.length < 12 || Buffer.byteLength(safePassword, 'utf8') > 72) return res.status(400).json({ error: 'Name (up to 80 characters), valid email, and a password of 12–72 bytes are required.' })
   if (db.prepare('SELECT id FROM users WHERE email = ?').get(safeEmail)) return res.status(409).json({ error: 'A user already exists with this email.' })
@@ -832,7 +664,24 @@ app.post('/api/auth/signup', (req, res) => {
     queueAuthEmail(user.id, user.email, 'Verify your Grounded email', 'Hi ' + user.name + ',\n\nVerify your email address within 24 hours:\n' + url.toString() + '\n\nIf you did not create this account, ignore this email.')
     return res.status(201).json({ verificationRequired: true, message: 'Check your email for a verification link. The link expires in 24 hours.' })
   }
-  return res.status(201).json({ token: createUserToken(user), user })
+  return respondWithUserSession(res, user, { status: 201 })
+})
+
+app.post('/api/auth/logout', (req, res) => {
+  const authHeader = req.headers.authorization || ''
+  const token = getCookie(req, SESSION_COOKIE_NAME) || (!isProduction && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null)
+  if (token) {
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET)
+      if (decoded && Number.isInteger(decoded.id)) {
+        db.prepare('UPDATE users SET session_version = session_version + 1 WHERE id = ?').run(decoded.id)
+      }
+    } catch {
+      // Logout remains successful for expired, revoked, or malformed sessions.
+    }
+  }
+  if (isProduction) res.setHeader('Set-Cookie', clearSessionCookieHeaders({ secure: true }))
+  return res.status(204).end()
 })
 
 app.post('/api/auth/verify-email', (req, res) => {
@@ -848,8 +697,8 @@ app.post('/api/auth/verify-email', (req, res) => {
 })
 
 app.post('/api/auth/resend-verification', (req, res) => {
-  if (!enforceRateLimit(req, 'resend-verification', 5)) return res.status(429).json({ error: 'Too many requests. Please wait before trying again.' })
   const email = sanitizeText(req.body?.email).toLowerCase()
+  if (!enforceRateLimit(req, 'resend-verification', 5, email)) return res.status(429).json({ error: 'Too many requests. Please wait before trying again.' })
   if (isValidEmail(email) && emailTransport) {
     const user = db.prepare('SELECT id, name, email FROM users WHERE email = ? AND email_verified = 0').get(email)
     if (user) {
@@ -863,8 +712,8 @@ app.post('/api/auth/resend-verification', (req, res) => {
 })
 
 app.post('/api/auth/password-reset/request', (req, res) => {
-  if (!enforceRateLimit(req, 'password-reset-request', 5)) return res.status(429).json({ error: 'Too many requests. Please wait before trying again.' })
   const email = sanitizeText(req.body?.email).toLowerCase()
+  if (!enforceRateLimit(req, 'password-reset-request', 5, email)) return res.status(429).json({ error: 'Too many requests. Please wait before trying again.' })
   if (isValidEmail(email) && emailTransport) {
     const user = db.prepare('SELECT id, name, email FROM users WHERE email = ?').get(email)
     if (user) {
@@ -881,7 +730,7 @@ app.post('/api/auth/password-reset/complete', (req, res) => {
   const token = typeof req.body?.token === 'string' ? req.body.token : ''
   const password = typeof req.body?.password === 'string' ? req.body.password : ''
   if (!/^[a-f0-9]{64}$/.test(token) || password.length < 12 || Buffer.byteLength(password, 'utf8') > 72) return res.status(400).json({ error: 'A valid reset link and a password of 12–72 bytes are required.' })
-  if (!enforceRateLimit(req, 'password-reset-complete', 10)) return res.status(429).json({ error: 'Too many attempts. Please wait before trying again.' })
+  if (!enforceRateLimit(req, 'password-reset-complete', 10, token)) return res.status(429).json({ error: 'Too many attempts. Please wait before trying again.' })
   const record = db.prepare("SELECT user_id FROM auth_tokens WHERE token_hash = ? AND purpose = 'reset_password' AND expires_at > CURRENT_TIMESTAMP").get(hashAuthToken(token))
   if (!record) return res.status(400).json({ error: 'Reset link is invalid or expired. Request another one.' })
   db.transaction(() => {
@@ -893,11 +742,11 @@ app.post('/api/auth/password-reset/complete', (req, res) => {
 
 app.post('/api/auth/login', (req, res) => {
   const { email, password } = req.body || {}
-  if (!enforceRateLimit(req, 'login', RATE_LIMITS.login)) {
+  const safeEmail = sanitizeText(email).toLowerCase()
+  if (!enforceRateLimit(req, 'login', RATE_LIMITS.login, safeEmail)) {
     return res.status(429).json({ error: 'Too many login attempts. Please wait a moment and try again.' })
   }
 
-  const safeEmail = sanitizeText(email).toLowerCase()
   const safePassword = String(password || '')
 
   if (!isValidEmail(safeEmail) || !safePassword || Buffer.byteLength(safePassword, 'utf8') > 72) {
@@ -923,7 +772,7 @@ app.post('/api/auth/login', (req, res) => {
     'Your Grounded account was just accessed with your email and password.',
     `A sign-in to your Grounded account was completed at ${new Date().toUTCString()} using email and password. If this was not you, change your password and contact support.`,
   )
-  return res.json({ token: createUserToken(safeUser), user: safeUser })
+  return respondWithUserSession(res, safeUser)
 })
 
 app.post('/api/auth/google', async (req, res, next) => {
@@ -981,7 +830,7 @@ app.post('/api/auth/google', async (req, res, next) => {
         ? `Hi ${safeUser.name},\n\nYour Grounded account was created with Google. You can review account activity in your in-app Notifications.\n\nIf you did not create this account, contact support.`
         : `A Google sign-in to your Grounded account was completed at ${new Date().toUTCString()}. If this was not you, review your Google account security and contact support.`,
     )
-    return res.json({ token: createUserToken(safeUser), user: safeUser, newUser: created })
+    return respondWithUserSession(res, safeUser, { extra: { newUser: created } })
   } catch (error) {
     return next(error)
   }
@@ -1087,7 +936,7 @@ const bankSyncTimer = setInterval(() => {
   const connections = db.prepare("SELECT * FROM bank_connections WHERE status = 'connected'").all()
   for (const connection of connections) {
     void syncPlaidConnection(connection).catch((error) => {
-      console.error('Automatic bank transaction sync failed:', error?.response?.data?.error_code || error?.code || error?.message || 'Unknown Plaid error')
+      console.error('Automatic bank transaction sync failed:', getSafeErrorCode(error, error?.response?.data?.error_code))
     })
   }
 }, 15 * 60 * 1000)
@@ -1132,7 +981,7 @@ app.post('/api/banking/link-token', withUser, async (req, res, next) => {
   if (req.body?.consent !== true) {
     return res.status(400).json({ error: 'Explicit consent is required before starting bank connection.' })
   }
-  if (!enforceRateLimit(req, 'bank-link', 5)) {
+  if (!enforceRateLimit(req, 'bank-link', 5, req.user.id)) {
     return res.status(429).json({ error: 'Too many bank-link attempts. Please wait and try again.' })
   }
   try {
@@ -1154,7 +1003,7 @@ app.post('/api/banking/link-token', withUser, async (req, res, next) => {
 
 app.post('/api/banking/exchange', withUser, async (req, res, next) => {
   if (!plaidClient) return res.status(503).json({ error: 'Automatic bank connections are not configured yet.' })
-  if (!enforceRateLimit(req, 'bank-link', 5)) {
+  if (!enforceRateLimit(req, 'bank-link', 5, req.user.id)) {
     return res.status(429).json({ error: 'Too many bank-link attempts. Please wait and try again.' })
   }
   const publicToken = req.body?.publicToken
@@ -1213,7 +1062,7 @@ app.post('/api/banking/exchange', withUser, async (req, res, next) => {
 
 app.post('/api/banking/sync', withUser, async (req, res, next) => {
   if (!plaidClient) return res.status(503).json({ error: 'Automatic bank connections are not configured yet.' })
-  if (!enforceRateLimit(req, 'bank-sync', 5)) {
+  if (!enforceRateLimit(req, 'bank-sync', 5, req.user.id)) {
     return res.status(429).json({ error: 'Too many sync requests. Please wait and try again.' })
   }
   const connections = db.prepare("SELECT * FROM bank_connections WHERE user_id = ? AND status = 'connected'")
@@ -1234,6 +1083,9 @@ app.post('/api/banking/sync', withUser, async (req, res, next) => {
 
 app.delete('/api/banking/connections/:itemId', withUser, async (req, res, next) => {
   if (!plaidClient) return res.status(503).json({ error: 'Automatic bank connections are not configured.' })
+  if (!enforceRateLimit(req, 'bank-disconnect', 10, req.user.id)) {
+    return res.status(429).json({ error: 'Too many bank disconnection attempts. Please wait and try again.' })
+  }
   const connection = db.prepare(`
     SELECT * FROM bank_connections
     WHERE item_id = ? AND user_id = ? AND status = 'connected'
@@ -1292,9 +1144,9 @@ app.post('/api/notifications/read-all', withUser, (req, res) => {
 app.post('/api/accounts', withUser, (req, res) => {
   const name = sanitizeText(req.body?.name)
   const type = sanitizeText(req.body?.type)
-  const balance = Number(req.body?.balance)
+  const balance = parseSignedCurrency(req.body?.balance)
   const accountTypes = ['Checking', 'Savings', 'Credit card', 'Cash', 'Investment', 'Other']
-  if (!name || name.length > 100 || !accountTypes.includes(type) || !Number.isFinite(balance) || Math.abs(balance) > 100000000) {
+  if (!name || name.length > 100 || !accountTypes.includes(type) || balance === null) {
     return res.status(400).json({ error: 'Enter an account name, supported account type, and a balance within +/- 100,000,000.' })
   }
   const result = db.prepare('INSERT INTO accounts (user_id, name, type, balance) VALUES (?, ?, ?, ?)')
@@ -1317,7 +1169,7 @@ app.post('/api/billing/checkout', withUser, async (req, res, next) => {
   if (!stripe || !stripePrices.monthly || !stripePrices.annual) {
     return res.status(503).json({ error: 'Paid plans are not configured yet. Please try again later.' })
   }
-  if (!enforceRateLimit(req, 'billing-checkout', 5)) {
+  if (!enforceRateLimit(req, 'billing-checkout', 5, req.user.id)) {
     return res.status(429).json({ error: 'Too many checkout requests. Please wait and try again.' })
   }
   if (getBillingStatus(req.user.id).plan === 'plus') {
@@ -1400,7 +1252,7 @@ app.post('/api/billing/portal', withUser, async (req, res, next) => {
   if (!billingRecord?.stripe_customer_id) {
     return res.status(404).json({ error: 'No billing account exists yet.' })
   }
-  if (!enforceRateLimit(req, 'billing-portal', 10)) {
+  if (!enforceRateLimit(req, 'billing-portal', 10, req.user.id)) {
     return res.status(429).json({ error: 'Too many billing requests. Please wait and try again.' })
   }
 
@@ -1505,7 +1357,7 @@ app.delete('/api/data/delete', withUser, async (req, res, next) => {
         db.prepare("UPDATE bank_connections SET status = 'removed', encrypted_access_token = '', encryption_iv = '', encryption_tag = '' WHERE item_id = ? AND user_id = ?")
           .run(connection.item_id, req.user.id)
       } catch (error) {
-        console.error('Bank unlink during account deletion failed:', error?.response?.data?.error_code || error?.code || error?.message || 'Unknown Plaid error')
+        console.error('Bank unlink during account deletion failed:', getSafeErrorCode(error, error?.response?.data?.error_code))
         return res.status(502).json({ error: 'A bank connection could not be revoked, so the account was not deleted. Try again or contact support.' })
       }
     }
@@ -1546,9 +1398,10 @@ app.delete('/api/data/delete', withUser, async (req, res, next) => {
     try {
       await emailTransport.sendMail({ from: emailFrom, ...deletionEmail })
     } catch (error) {
-      console.error('Account deletion receipt email failed:', error?.code || 'Unknown SMTP error')
+      console.error('Account deletion receipt email failed:', getSafeErrorCode(error))
     }
   }
+  if (isProduction) res.setHeader('Set-Cookie', clearSessionCookieHeaders({ secure: true }))
   return res.json({ success: true })
 })
 
@@ -1629,11 +1482,9 @@ app.post('/api/tasks', withUser, (req, res) => {
 })
 
 app.patch('/api/tasks/:id/toggle', withUser, (req, res) => {
-  const task = db.prepare('SELECT id, completed FROM tasks WHERE id = ? AND user_id = ?').get(Number(req.params.id), req.user.id)
-  if (!task) {
-    return res.status(404).json({ error: 'Task not found.' })
-  }
-  const result = db.prepare('UPDATE tasks SET completed = ? WHERE id = ? AND user_id = ?').run(task.completed ? 0 : 1, task.id, req.user.id)
+  const taskId = Number(req.params.id)
+  if (!Number.isSafeInteger(taskId) || taskId < 1) return res.status(404).json({ error: 'Task not found.' })
+  const result = db.prepare('UPDATE tasks SET completed = CASE completed WHEN 0 THEN 1 ELSE 0 END WHERE id = ? AND user_id = ?').run(taskId, req.user.id)
   if (!result.changes) {
     return res.status(404).json({ error: 'Task not found.' })
   }
@@ -1649,9 +1500,11 @@ app.post('/api/goals', withUser, (req, res) => {
   const { name, target, date, contribution } = req.body || {}
   const safeName = sanitizeText(name)
   const safeTarget = parseCurrency(target)
+  const safeDate = sanitizeText(date)
+  const safeContribution = sanitizeText(contribution)
 
-  if (!safeName || safeName.length > 120 || safeTarget === null || safeTarget <= 0) {
-    return res.status(400).json({ error: 'Goal name and target are required.' })
+  if (!safeName || safeName.length > 120 || safeTarget === null || safeTarget <= 0 || (safeDate && !isValidIsoDate(safeDate)) || safeContribution.length > 80) {
+    return res.status(400).json({ error: 'Goal name, target, date, or contribution is invalid.' })
   }
   if (getBillingStatus(req.user.id).plan !== 'plus') {
     const currentGoalCount = db.prepare('SELECT COUNT(*) AS count FROM goals WHERE user_id = ?').get(req.user.id).count
@@ -1661,7 +1514,7 @@ app.post('/api/goals', withUser, (req, res) => {
   }
 
   const result = db.prepare('INSERT INTO goals (user_id, name, current_amount, target_amount, due_date, contribution) VALUES (?, ?, 0, ?, ?, ?)')
-    .run(req.user.id, safeName, safeTarget, sanitizeText(date), sanitizeText(contribution))
+    .run(req.user.id, safeName, safeTarget, safeDate, safeContribution)
   const goal = db.prepare('SELECT id, name, current_amount AS current, target_amount AS target, due_date AS date, contribution FROM goals WHERE id = ?').get(result.lastInsertRowid)
   return res.status(201).json(goal)
 })
@@ -1707,13 +1560,14 @@ app.post('/api/bills', withUser, (req, res) => {
   const safeDueDate = sanitizeText(dueDate)
   const safeCategory = sanitizeText(category)
   const safeAmount = parseCurrency(amount)
+  const safeFrequency = sanitizeText(frequency, 'Monthly')
 
-  if (!safeName || safeName.length > 120 || safeAmount === null || safeAmount <= 0 || !safeDueDate || safeDueDate.length > 80 || !safeCategory || safeCategory.length > 80) {
-    return res.status(400).json({ error: 'Bill name, amount, due date, and category are required.' })
+  if (!safeName || safeName.length > 120 || safeAmount === null || safeAmount <= 0 || !isValidIsoDate(safeDueDate) || !safeCategory || safeCategory.length > 80 || !isAllowedFrequency(safeFrequency) || !isOptionalBoolean(isFixed) || !isOptionalBoolean(isEstimated) || !isOptionalBoolean(active)) {
+    return res.status(400).json({ error: 'Bill details, date, frequency, or flags are invalid.' })
   }
 
   const result = db.prepare('INSERT INTO bills (user_id, name, amount, frequency, due_date, category, is_fixed, is_estimated, active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-    .run(req.user.id, safeName, safeAmount, sanitizeText(frequency, 'Monthly'), safeDueDate, safeCategory, Number(Boolean(isFixed)), Number(Boolean(isEstimated)), Number(active !== false))
+    .run(req.user.id, safeName, safeAmount, safeFrequency, safeDueDate, safeCategory, Number(Boolean(isFixed)), Number(Boolean(isEstimated)), Number(active !== false))
 
   const bill = db.prepare('SELECT id, name, amount, frequency, due_date AS dueDate, category, is_fixed AS isFixed, is_estimated AS isEstimated, active FROM bills WHERE id = ?').get(result.lastInsertRowid)
   return res.status(201).json(bill)
@@ -1729,13 +1583,15 @@ app.post('/api/income', withUser, (req, res) => {
   const safeSource = sanitizeText(source)
   const safeNextDate = sanitizeText(nextDate)
   const safeAmount = parseCurrency(amount)
+  const safeFrequency = sanitizeText(frequency, 'Monthly')
+  const safeNotes = sanitizeText(notes)
 
-  if (!safeSource || safeSource.length > 120 || safeAmount === null || safeAmount <= 0 || !safeNextDate || safeNextDate.length > 80) {
-    return res.status(400).json({ error: 'Income source, amount, and next date are required.' })
+  if (!safeSource || safeSource.length > 120 || safeAmount === null || safeAmount <= 0 || !isValidIsoDate(safeNextDate) || !isAllowedFrequency(safeFrequency) || !isOptionalBoolean(isVariable) || safeNotes.length > 500) {
+    return res.status(400).json({ error: 'Income details, date, frequency, or flags are invalid.' })
   }
 
   const result = db.prepare('INSERT INTO incomes (user_id, source, amount, frequency, next_date, is_variable, notes) VALUES (?, ?, ?, ?, ?, ?, ?)')
-    .run(req.user.id, safeSource, safeAmount, sanitizeText(frequency, 'Monthly'), safeNextDate, Number(Boolean(isVariable)), sanitizeText(notes, ''))
+    .run(req.user.id, safeSource, safeAmount, safeFrequency, safeNextDate, Number(Boolean(isVariable)), safeNotes)
 
   const income = db.prepare('SELECT id, source, amount, frequency, next_date AS nextDate, is_variable AS isVariable, notes FROM incomes WHERE id = ?').get(result.lastInsertRowid)
   return res.status(201).json(income)
@@ -1751,13 +1607,15 @@ app.post('/api/subscriptions', withUser, (req, res) => {
   const safeMerchant = sanitizeText(merchant)
   const safeNextDate = sanitizeText(nextDate)
   const safeAmount = parseCurrency(amount)
+  const safeFrequency = sanitizeText(frequency, 'Monthly')
+  const safeStatus = sanitizeText(status, 'Active')
 
-  if (!safeMerchant || safeMerchant.length > 120 || safeAmount === null || safeAmount <= 0 || !safeNextDate || safeNextDate.length > 80) {
-    return res.status(400).json({ error: 'Subscription merchant, amount, and next renewal date are required.' })
+  if (!safeMerchant || safeMerchant.length > 120 || safeAmount === null || safeAmount <= 0 || !isValidIsoDate(safeNextDate) || !isAllowedFrequency(safeFrequency) || !isAllowedSubscriptionStatus(safeStatus)) {
+    return res.status(400).json({ error: 'Subscription merchant, amount, date, frequency, or status is invalid.' })
   }
 
   const result = db.prepare('INSERT INTO subscriptions (user_id, merchant, amount, frequency, next_date, status) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(req.user.id, safeMerchant, safeAmount, sanitizeText(frequency, 'Monthly'), safeNextDate, sanitizeText(status, 'Active'))
+    .run(req.user.id, safeMerchant, safeAmount, safeFrequency, safeNextDate, safeStatus)
 
   const subscription = db.prepare('SELECT id, merchant, amount, frequency, next_date AS nextDate, status FROM subscriptions WHERE id = ?').get(result.lastInsertRowid)
   return res.status(201).json(subscription)
@@ -1803,7 +1661,7 @@ app.use((error, _req, res, _next) => {
   if (error instanceof SyntaxError && 'body' in error) {
     return res.status(400).json({ error: 'Request body must be valid JSON.' })
   }
-  console.error('Unhandled server error:', error)
+  console.error('Unhandled server error:', getSafeErrorCode(error))
   return res.status(500).json({ error: 'Internal server error.' })
 })
 
