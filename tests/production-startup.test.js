@@ -1,7 +1,10 @@
 import assert from 'node:assert/strict'
+import { existsSync } from 'node:fs'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { spawnSync } from 'node:child_process'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
+import os from 'node:os'
 import path from 'node:path'
 
 const serverPath = fileURLToPath(new URL('../server/index.js', import.meta.url))
@@ -59,6 +62,32 @@ test('production startup requires a durable database path', () => {
   })
   assert.notEqual(result.status, 0, 'server must not start without a configured persistent database path')
   assert.match(result.stderr, /DATABASE_PATH must point to a persistent production data volume/)
+})
+
+test('production rejects an APP_BASE_URL origin mismatch before creating or opening SQLite', async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'grounded-invalid-origin-'))
+  const databasePath = path.join(directory, 'should-not-be-created.sqlite')
+  t.after(() => rm(directory, { recursive: true, force: true }))
+
+  const result = runWithProductionEnv({
+    APP_ENV: 'staging',
+    JWT_SECRET: 'synthetic-test-secret-that-is-at-least-32-chars',
+    ALLOWED_ORIGINS: 'https://allowed.example',
+    DATABASE_PATH: databasePath,
+    STRIPE_SECRET_KEY: 'sk_test_synthetic',
+    STRIPE_WEBHOOK_SECRET: 'whsec_synthetic',
+    STRIPE_PRICE_MONTHLY: 'price_synthetic_monthly',
+    STRIPE_PRICE_ANNUAL: 'price_synthetic_annual',
+    APP_BASE_URL: 'https://different.example',
+    SMTP_HOST: 'smtp.example.test',
+    SMTP_USER: 'synthetic-user',
+    SMTP_PASS: 'synthetic-password',
+    SMTP_FROM: 'Grounded <no-reply@example.test>',
+  })
+
+  assert.notEqual(result.status, 0)
+  assert.match(result.stderr, /APP_BASE_URL origin must be included in ALLOWED_ORIGINS/)
+  assert.equal(existsSync(databasePath), false, 'configuration rejection must happen before SQLite is created')
 })
 
 test('production-hardening staging mode explicitly requires test providers while live mode requires live providers', async () => {

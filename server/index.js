@@ -95,13 +95,6 @@ if (isProduction && appEnvironment === 'production' && !process.env.STRIPE_SECRE
 if (isProduction && appEnvironment === 'staging' && !process.env.STRIPE_SECRET_KEY.startsWith('sk_test_')) {
   throw new Error('Staging billing must use a Stripe test secret key.')
 }
-const databasePath = process.env.DATABASE_PATH
-  ? path.resolve(process.env.DATABASE_PATH)
-  : path.join(__dirname, '..', 'data', 'grounded.db')
-mkdirSync(path.dirname(databasePath), { recursive: true })
-const db = new Database(databasePath)
-db.pragma('foreign_keys = ON')
-db.pragma('journal_mode = WAL')
 const JWT_SECRET = process.env.JWT_SECRET || (isProduction ? '' : 'grounded-dev-secret')
 const stripe = process.env.STRIPE_SECRET_KEY ? new Stripe(process.env.STRIPE_SECRET_KEY) : null
 const googleClientId = process.env.GOOGLE_CLIENT_ID || ''
@@ -151,11 +144,20 @@ if (isProduction) {
     throw new Error('Production APP_BASE_URL must use HTTPS and cannot be localhost.')
   }
 }
+const allowedOrigins = parseAllowedOrigins(process.env.ALLOWED_ORIGINS, { production: isProduction })
+if (isProduction) assertAppBaseOriginAllowed(appBaseUrl, allowedOrigins)
 const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS || 60000)
 const RATE_LIMITS = { signup: 5, login: 10 }
 if (!Number.isInteger(RATE_LIMIT_WINDOW_MS) || RATE_LIMIT_WINDOW_MS < 1000 || RATE_LIMIT_WINDOW_MS > 3600000) {
   throw new Error('RATE_LIMIT_WINDOW_MS must be an integer between 1000 and 3600000.')
 }
+const databasePath = process.env.DATABASE_PATH
+  ? path.resolve(process.env.DATABASE_PATH)
+  : path.join(__dirname, '..', 'data', 'grounded.db')
+mkdirSync(path.dirname(databasePath), { recursive: true })
+const db = new Database(databasePath)
+db.pragma('foreign_keys = ON')
+db.pragma('journal_mode = WAL')
 const appStartTime = Date.now()
 
 const sanitizeText = (value, fallback = '') => {
@@ -296,9 +298,6 @@ const publicLegalPages = {
     ],
   },
 }
-
-const allowedOrigins = parseAllowedOrigins(process.env.ALLOWED_ORIGINS, { production: isProduction })
-if (isProduction) assertAppBaseOriginAllowed(appBaseUrl, allowedOrigins)
 
 const configuredTrustProxy = process.env.TRUST_PROXY_HOPS
 if (configuredTrustProxy === undefined && isProduction) {
