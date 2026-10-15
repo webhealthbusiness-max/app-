@@ -3,7 +3,7 @@
 **Audit date:** 2026-10-15  
 **Repository:** `webhealthbusiness-max/app-`  
 **Reviewed branch:** `codex/comprehensive-remediation`  
-**Reviewed code revision:** [`13518e0f3757c17bc586fe4e190fe422e03cdec7`](https://github.com/webhealthbusiness-max/app-/commit/13518e0f3757c17bc586fe4e190fe422e03cdec7)  
+**Reviewed code revision:** [`c9f94835531978b151310d372110e572bcb9980e`](https://github.com/webhealthbusiness-max/app-/commit/c9f94835531978b151310d372110e572bcb9980e)
 **Pull request:** [#10](https://github.com/webhealthbusiness-max/app-/pull/10), draft, open, unmerged; based on PR #1's `ci-smoke-tests` branch.  
 **Scope limit:** source, tests, GitHub history, and anonymous public HTTP requests. This is not a penetration test, legal opinion, provider certification, staging acceptance, or verification of the live container configuration. No production configuration, service, database, or financial data was changed.
 
@@ -135,7 +135,7 @@ The production readiness remediation is on draft PR #10 and depends on open PR #
 
 ### GitHub Actions evidence
 
-GitHub Actions run [#258](https://github.com/webhealthbusiness-max/app-/actions/runs/38683824361) on the preceding code commit completed successfully. It ran `npm ci`, `npm audit --audit-level=moderate`, `npm test`, deployment-checker syntax, frontend build, Playwright Chromium E2E, and Docker build. The origin-alignment addition in this worktree has local results above; its GitHub CI must complete after it is pushed. CI proves checks in GitHub's runner, not on IONOS or with real external services.
+GitHub Actions run [#260](https://github.com/webhealthbusiness-max/app-/actions/runs/38684806194) on reviewed code commit `c9f94835531978b151310d372110e572bcb9980e` completed successfully. It ran `npm ci`, `npm audit --audit-level=moderate`, `npm test`, deployment-checker syntax, frontend build, Playwright Chromium E2E, and Docker build. This proves those checks in GitHub's runner, not on IONOS or with real external services.
 
 The local browser runtime is not a reliable substitute for CI because this AlmaLinux workspace lacks browser system libraries (`libnspr4.so`). No local Playwright success is claimed. The public deployment checker is intentionally recorded as failed.
 
