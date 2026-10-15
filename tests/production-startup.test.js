@@ -142,3 +142,15 @@ test('Plaid sync persists the latest processed cursor when more pages remain', a
   assert.match(sync, /\.run\(cursor, connection\.item_id, connection\.user_id\)/, 'sync must save the latest processed cursor even when another batch remains')
   assert.doesNotMatch(sync, /\.run\(hasMore \? connection\.cursor : cursor/, 'sync must not retain the old cursor when more pages remain')
 })
+
+test('task creation bounds every user-controlled text field', async () => {
+  const { readFile } = await import('node:fs/promises')
+  const source = await readFile(serverPath, 'utf8')
+  const routeStart = source.indexOf("app.post('/api/tasks'")
+  const routeEnd = source.indexOf('\napp.', routeStart + 1)
+  assert.notEqual(routeStart, -1, 'task creation route must exist')
+  const route = source.slice(routeStart, routeEnd === -1 ? source.length : routeEnd)
+  assert.match(route, /safeTitle\.length > 120/)
+  assert.match(route, /safeCategory\.length > 80/)
+  assert.match(route, /safeDue\.length > 80/)
+})
